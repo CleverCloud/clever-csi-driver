@@ -1,0 +1,7 @@
+apiVersion: v2
+name: clever-csi-driver
+description: Clever Cloud CSI controller and node services
+version: 0.1.0
+appVersion: "0.1.0"
+type: application
+kubeVersion: ">=1.25.0-0"
