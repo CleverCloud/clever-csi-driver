@@ -5,6 +5,14 @@ activate Axo/Supernova's required volume API. Deploy to a disposable validation
 cluster first. The default image tag is `v0.1.0`, which must be built and published
 before installation; an unbuilt release is not made available by these files.
 
+This guide describes the current binary and chart, whose controller uses the
+historical `clever-csi-v1` HTTP contract (implementation baseline `339e7f0`).
+The [REST proposal dated 2026-10-13](axo-api.md) is not implemented by this
+client or Axo. Its dated version header, resource routes, response schemas and
+capability negotiation require the [client migration](axo-api.md#client-migration)
+before these deployment phases can target a server implementing that proposal.
+Changing documentation or chart values does not switch the client's protocol.
+
 ## Images and local verification
 
 ```sh
@@ -180,6 +188,8 @@ Readiness `/readyz` on port 9808 checks driver readiness; liveness `/healthz`
 checks the service. These are not proof that kubelet has registered the plugin
 or that a disk was safely handed over. Check CSINode identity, registrar logs,
 VolumeAttachments, Axo state and a real disposable PVC/pod separately.
+The current controller's readiness check validates `clever-csi-v1`; it does not
+negotiate or verify the proposed dated REST contract.
 
 Rollback requires a new node generation and a cold handoff to the legacy path,
 with consistent credentials, journals and fencing. Reversing a label or rolling

@@ -1,13 +1,37 @@
 # Validation
 
+The runtime results below apply to the implementation baseline `339e7f0` and
+its historical `clever-csi-v1` HTTP contract. The
+[REST proposal dated 2026-10-13](axo-api.md) requires the
+[client migration](axo-api.md#client-migration) and an Axo implementation;
+the existing controller tests do not exercise that proposal.
+
+## Proposed REST contract
+
+On 2026-10-13, the replacement document passed OpenAPI 3.1 validation and 169
+positive/negative schema cases. These covered conditional attachment fields,
+filesystem/Block shape, serials and identifiers, UTF-8 byte bounds, snapshot
+failure/readiness, bounded public diagnostics, deletion outcomes and pagination
+cursors. The byte-bound checks use the documented `x-maxUtf8Bytes` and
+`x-maxSerializedBytes` rules in addition to JSON Schema;
+ordinary schema tooling does not enforce that extension automatically.
+
+The document's 16 operations and 31 machine codes were also checked for matching
+HTTP responses, error catalogue references, version headers, authentication and
+operation-specific success bodies. These are local document checks, not
+runtime contract tests or evidence of an implemented Axo backend. The required
+client migration and platform acceptance tests remain outstanding.
+
 ## Rust and real Linux storage tests
 
 Final local checks on 2026-10-13 passed: `cargo fmt --all -- --check`,
 `cargo clippy --all-targets --locked -- -D warnings` and
 `cargo test --all-targets --locked`. The ordinary test run passed **62 tests**
 (35 library, 26 controller contract and one gRPC transport), with the privileged
-Linux test explicitly excluded and run separately as described below. The final
-OpenAPI 3.1 document also passed `openapi-spec-validator` validation.
+Linux test explicitly excluded and run separately as described below. The
+historical `clever-csi-v1` OpenAPI 3.1 document at that baseline also passed
+`openapi-spec-validator` validation. That result does not apply to the replacement
+REST proposal in the current API documents.
 
 The Rust unit and contract tests exercise persistent node-state recovery,
 device identity, mount ownership, read-only access, malformed requests,
@@ -44,10 +68,11 @@ of remaining test resources was checked. The test is ignored in an ordinary
 image publication. SCSI VPD serial discovery used a sysfs fixture backed by
 real loop devices; this does **not** validate a QEMU virtio-scsi attachment.
 
-Controller contract tests use a mock Axo HTTP server. The proposed routes and
-OpenAPI document describe backend work still required in Axo and Supernova;
-there has been no end-to-end Ceph provisioning, real VM fencing, legacy volume
-migration or billing validation against those services.
+Controller contract tests use a mock Axo HTTP server implementing the historical
+routes and response shapes. The replacement API documents describe a future
+contract for both client and backend; neither those mocks nor the runtime
+implement it. There has been no end-to-end Ceph provisioning, real VM fencing,
+legacy volume migration or billing validation against Axo and Supernova.
 
 ## Packaging and isolated cluster smoke
 

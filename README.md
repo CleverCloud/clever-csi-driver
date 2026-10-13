@@ -4,15 +4,21 @@ Clever Cloud CSI driver written in **Rust**, with an Axo-backed controller and a
 Linux node plugin. Both roles use the same binary and container image.
 
 This repository provides the driver, Helm chart and manifests for Axo.
-**The Axo volume API is a proposed contract that still requires platform
-implementation.** The controller reports readiness only when the backend
-advertises the required capabilities. End-to-end operation also requires the
-Supernova attachment workflow described in that contract.
+**The current controller implements the historical `clever-csi-v1` HTTP
+contract (implementation baseline `339e7f0`).** It reports readiness only when
+the backend advertises that contract's required capabilities. The corresponding
+Axo/Supernova backend still requires implementation and integration validation.
+
+The [REST API proposal dated 2026-10-13](docs/axo-api.md) and its
+[OpenAPI document](docs/axo-openapi.yaml) describe the next contract. **Neither
+the current client nor Axo implements this proposal.** See the
+[client migration requirements](docs/axo-api.md#client-migration) before pairing
+the driver with a server implementing it.
 
 ```mermaid
 flowchart LR
   K[Kubernetes / CSI sidecars] --> C[Rust controller]
-  C -->|HTTPS + cluster-scoped Biscuit| A[Proposed Axo CSI API]
+  C -->|HTTPS + cluster-scoped Biscuit| A[Axo backend / clever-csi-v1]
   A --> S[Supernova / QEMU]
   S -->|librbd| R[(Existing or new Ceph image)]
   S -->|virtio-scsi, stable serial| D[Guest disk]
@@ -35,8 +41,9 @@ flowchart LR
   projected token for each request to support rotation.
 
 `ListVolumes`, `GetCapacity`, mutable volume attributes, topology and group
-snapshots are not advertised. See the [Axo API contract](docs/axo-api.md) and
-[OpenAPI specification](docs/axo-openapi.yaml) for required backend guarantees.
+snapshots are not advertised. See the [Axo REST proposal](docs/axo-api.md) and
+[OpenAPI proposal](docs/axo-openapi.yaml) for the target backend design;
+these documents are not the wire contract implemented by the current binary.
 
 ## Migration and storage requirements
 
@@ -55,8 +62,8 @@ under exclusive ownership before attachment. Adopted images retain their data
 and filesystem; an empty `blkid` result is not evidence that formatting is safe.
 Block volumes remain raw.
 
-Axo explicitly routes historical ceph-csi node IDs through `legacy-krbd`. New
-nodes require a platform-provided VM incarnation ID in
+The current client requires Axo to route historical ceph-csi node IDs through
+`legacy-krbd`. New nodes require a platform-provided VM incarnation ID in
 `/etc/clever-csi/node-id`. QEMU `scsi-hd` serials must match
 `[A-Za-z0-9._-]{1,36}` and remain distinct from opaque volume handles.
 
@@ -81,8 +88,9 @@ docker build -t clever-csi-driver:dev .
 bash deploy/test_linux.sh
 ```
 
-Controller contract tests use a mock Axo server. Node tests cover recovery,
-ownership, read-only access and refusal to format unknown disks. The
+Controller contract tests use a mock Axo server for the historical
+`clever-csi-v1` contract. They do not validate the REST proposal. Node tests cover
+recovery, ownership, read-only access and refusal to format unknown disks. The
 [validation report](docs/validation.md) separates these checks from platform
 integration tests still required before rollout.
 
@@ -122,6 +130,6 @@ Secrets and snapshot CRDs remain under their current ownership.
 
 Follow the [operations and migration guide](docs/operations.md) for controller
 handoffs, sidecar leases, Axo catalog integration and the `linux-vm:kube` kernel
-profile. A real migration requires the Axo contract, QEMU/KVM validation and a
-canary with confirmed unmount or fencing. The earlier krbd laboratory results
-do not validate this attachment path.
+profile. A real migration requires a compatible driver/backend contract,
+QEMU/KVM validation and a canary with confirmed unmount or fencing. The earlier
+krbd laboratory results do not validate this attachment path.
