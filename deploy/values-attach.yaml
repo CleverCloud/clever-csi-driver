@@ -1,4 +1,4 @@
-# Use only after removing the legacy attacher and confirming its lease is released.
+# Use only after removing the legacy attacher and confirming its lease expired after the process stopped.
 controller:
   enabled: true
   ownershipConfirmed: true

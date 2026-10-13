@@ -21,7 +21,7 @@ jobs:
           cargo +1.90.0 fmt --all --check
           cargo +1.90.0 clippy --locked --all-targets -- -D warnings
           cargo +1.90.0 test --locked --all-targets
-      - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
         with:
           version: v3.19.0
       - name: Check Helm and generated Axo bundles
@@ -31,6 +31,8 @@ jobs:
           helm package charts/clever-csi-driver --destination "$RUNNER_TEMP/charts"
           python3 deploy/test_packaging.py
           python3 deploy/render.py --check
+          python3 deploy/test_api_contract.py
+          python3 -m openapi_spec_validator docs/axo-openapi-v1.yaml
   linux-mounts:
     needs: test
     runs-on: ubuntu-24.04
@@ -38,6 +40,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Exercise real XFS, ext4 and raw block on fresh loop devices
         run: bash deploy/test_linux.sh
+      - name: Run CSI conformance against isolated node and Axo fixtures
+        run: bash deploy/test_linux.sh sanity
   image:
     needs: [test, linux-mounts]
     runs-on: ubuntu-24.04

@@ -65,9 +65,11 @@ spec:
             - --leader-election-namespace={{ $.Release.Namespace }}
             - --timeout=180s
             {{- if eq $role "provisioner" }}
+            - --default-fstype=xfs
             - --feature-gates=Topology=false
             - --enable-capacity=false
             {{- else if eq $role "resizer" }}
+            - --handle-volume-inuse-error=false
             - --feature-gates=VolumeAttributesClass=false
             {{- else if eq $role "snapshotter" }}
             - --feature-gates=CSIVolumeGroupSnapshot=false

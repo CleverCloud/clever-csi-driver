@@ -1,4 +1,5 @@
-{{- if and .Values.controller.enabled (not .Values.controller.ownershipConfirmed) -}}
+{{- $activeRoles := or .Values.controller.sidecars.attacher .Values.controller.sidecars.provisioner .Values.controller.sidecars.resizer .Values.controller.sidecars.snapshotter -}}
+{{- if and .Values.controller.enabled $activeRoles (not .Values.controller.ownershipConfirmed) -}}
 {{- fail "controller.ownershipConfirmed must be true after stopping the legacy sidecars for every enabled role" -}}
 {{- end -}}
 {{- if .Values.controller.enabled -}}

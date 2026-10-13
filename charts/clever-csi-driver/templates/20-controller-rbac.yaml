@@ -38,9 +38,6 @@ rules:
   {{- end }}
   {{- if .Values.controller.sidecars.resizer }}
   - apiGroups: [""]
-    resources: [pods]
-    verbs: [get, list, watch]
-  - apiGroups: [""]
     resources: [persistentvolumeclaims/status]
     verbs: [update, patch]
   {{- end }}

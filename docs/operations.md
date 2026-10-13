@@ -6,7 +6,7 @@ cluster first. The default image tag is `v0.1.0`, which must be built and publis
 before installation; an unbuilt release is not made available by these files.
 
 This guide describes the current binary and chart, whose controller uses the
-historical `clever-csi-v1` HTTP contract (implementation baseline `339e7f0`).
+[current `clever-csi-v1` HTTP contract](axo-api-v1.md) (implementation baseline `339e7f0`).
 The [REST proposal dated 2026-10-13](axo-api.md) is not implemented by this
 client or Axo. Its dated version header, resource routes, response schemas and
 capability negotiation require the [client migration](axo-api.md#client-migration)
@@ -21,10 +21,13 @@ python3 -m pip install -r deploy/requirements.txt
 helm lint charts/clever-csi-driver
 python3 deploy/test_packaging.py
 python3 deploy/render.py --check
+python3 deploy/test_api_contract.py
 docker build --tag clever-csi-driver:test .
 python3 deploy/test_image.py clever-csi-driver:test
 # Requires a Docker daemon allowed to run disposable privileged containers:
 bash deploy/test_linux.sh
+# CSI conformance with a test-only combined server and a local Axo fixture:
+bash deploy/test_linux.sh sanity
 ```
 
 The multi-stage image compiles with Rust 1.90 on Debian Bookworm and includes
@@ -32,7 +35,9 @@ The multi-stage image compiles with Rust 1.90 on Debian Bookworm and includes
 The node service runs privileged; the controller runs as UID/GID 65532 with a read-only
 root filesystem. The node mounts `/sys` writable solely to rescan the verified
 SCSI device during expansion. Device identity is validated before that sysfs
-write. The node never needs Ceph clients or Ceph credentials. It
+write. The node never uses Ceph clients or Ceph credentials. Kubelet still sends
+credentials from existing PV `node-stage-secret` references; the driver ignores
+these request fields. Keep referenced Secrets until their consumers are retired. It
 refuses to format unknown disks: Axo must supply a preformatted XFS/ext4 image
 for Filesystem volumes, while raw Block volumes are never formatted.
 
@@ -54,14 +59,23 @@ serialized; automatic cancellation is limited to pull requests, so another push
 does not interrupt an active publication.
 The repository must have permission to create/write this package in the
 CleverCloud organization. This implementation does not push a release itself.
+Make the package readable by the cluster before installation: either publish it
+publicly or configure `imagePullSecrets` for both workloads. Tags, including
+commit tags, are mutable across rebuilt workflow runs. For rollout, record and
+set `image.digest=sha256:<registry-digest>`; it overrides `image.tag`. Use the
+registry digest of the tested image, not its local Docker image ID.
 
 ## Mount and recovery policy
 
-Filesystem mounts always include `nosuid,nodev`; raw Block binds include
+In the driver's mount namespace, filesystem mounts include `nosuid,nodev`; raw Block binds include
 `nosuid` without `nodev`. `noexec` is applied only when requested. Mount options
 that weaken these defaults, including `suid` and `dev`, are rejected. Workloads
 that depend on setuid executables or device files within a filesystem volume
-must be reviewed before moving from the legacy plugin. Retaining a volume's
+must be reviewed before moving from the legacy plugin. These are driver-side
+mount checks, not a guarantee of the final flags inside every pod: the container
+runtime can set different flags on its own bind mount. Inspect the actual pod
+mount and enforce workload security through the cluster's admission/runtime
+policy. Retaining a volume's
 data and handle does not imply identical mount options to the legacy deployment.
 
 For filesystems, effective read-only access combines the attachment, volume
@@ -79,10 +93,24 @@ old staging and published mounts are gone and the new device has no conflicting
 mounts. Conflicting identities and mounted devices still cause refusal. Raw
 Block checks inspect the block inode's device number as well as mountinfo.
 Do not delete the state registry to bypass an ownership failure.
+If recovery refuses a volume, stop its consumers, preserve the registry and
+collect device serials, mount tables and Axo attachment state. Resolve the
+ownership discrepancy or replace the node through a fenced handoff; there is no
+supported manual registry-editing command. Even an exclusive-open check cannot
+prove that every raw Block file descriptor in another process is closed. Backend
+writer fencing remains required before detaching or transferring ownership.
 
 Unpublish removes the driver's target file or empty directory after unmounting
 and verifying ownership. It does not recursively remove data or unrelated
 targets. The staging directory remains owned by kubelet after Unstage.
+
+The QEMU path supports XFS/ext4 and single-node writer/reader access only. Its
+mount-option allowlist is `ro`, `rw`, `nosuid`, `nodev`, `noexec`, `noatime`,
+`relatime`, `strictatime`, `nodiratime`, `sync`, `dirsync`, `discard`, `nodiscard`,
+plus `nouuid` for XFS. Conflicting options, encryption, `rbd-nbd`, other
+filesystems and shared multi-node access must not be migrated to this path.
+A read-only filesystem with an unreplayed journal also requires preparation
+under exclusive writable ownership; `norecovery`/`noload` are not supported.
 
 ## Inputs owned by the platform
 
@@ -126,6 +154,20 @@ by both name and namespace. `controller.ownershipConfirmed=true` is a deliberate
 operator declaration; Helm cannot determine that the previous controller is
 stopped or that a volume is safe to transfer.
 
+These phases are requirements for a future Axo integration, not an executable
+cluster upgrade on the current catalog. Axo must persist a per-cluster phase and
+per-generation node profile, and render the matching legacy/new controller roles
+and node affinities on every reconciliation. Its current shared `CEPH_CSI`
+corpus and forced server-side apply will restore a manually removed attacher.
+Changing that global corpus alone would affect other clusters. Do not start a
+canary until phase selection and reconciliation persistence are implemented.
+
+Inventory PV/PVC modes, access modes, filesystems, mount options, encryption,
+mounters, Secret references, volume/snapshot handles and group snapshots before
+cutover. Separate workloads that the QEMU path cannot serve and keep them on
+legacy nodes. Group snapshots have no replacement handler in this driver;
+their outstanding resources must be resolved before removing that legacy role.
+
 Before `stage`, update the legacy ceph-csi DaemonSet in Axo's catalog to require
 `clever-cloud.com/csi NotIn [supernova]`. The new DaemonSet requires `In
 [supernova]`; the absence of the label matches only the legacy plugin. Ensure
@@ -133,6 +175,12 @@ these requirements survive Axo reconciliation. Never relabel a live node to
 switch implementations: the socket and registrar identity are shared. A fresh
 node receives its label and profile at creation. The new DaemonSet uses
 `OnDelete` so a chart update does not silently restart all mounted node plugins.
+The platform must create that label and the incarnation file together; neither
+the chart nor the current catalog produces the node profile. If `node.poolLabel`
+or `node.poolValue` changes, change the complementary legacy exclusion too.
+During `stage`, keep new nodes cordoned and prohibit storage workloads on them.
+The old attacher can mark a VolumeAttachment attached without QEMU metadata;
+such an attachment is not automatically republished by installing the new driver.
 
 Existing ceph-csi CSINodes can report a Kubernetes Node name as NodeID. Axo must
 explicitly route those legacy attachments as `legacy-krbd` while routing new VM
@@ -140,17 +188,42 @@ incarnation identities as `qemu`. Never resolve a name or IP to a guessed QEMU
 instance. The backend must advertise and implement this mixed-pool contract
 before the new attacher takes over the cluster.
 
-Before `attach`, stop/remove the **legacy attacher** in the catalog, verify its
-process is stopped and its lease released, deploy the new controller, and
-confirm the new attacher acquires the expected lease before any node roll. Do
+Before `attach`, start the new controller with every sidecar disabled and verify
+its `/readyz`, CSI Probe and the backend's complete required capability set.
+The current client requires its full feature set even for an attacher-only phase;
+do not discover an unsupported backend after stopping the old attacher.
+For this preflight, set `controller.enabled=true` and all four
+`controller.sidecars.*` values to `false`; `ownershipConfirmed` can remain false
+because no controller role is being taken over. Supply the normal cluster,
+organisation and token settings. `attachment.allowed-transports` must be present:
+the backend must enforce the controller's allowed route before mutating a disk.
+Then transition this cluster's persisted catalog phase, stop/remove the **legacy
+attacher**, verify its process is stopped and its lease has expired, enable the
+new attacher, and confirm it acquires the expected lease before any node roll. Do
 not depend on leader election to coordinate two different controller
 implementations: a legacy sidecar must not reacquire the role later. Other
 legacy roles remain active until their explicit handoff. All gRPC sidecar
 operation timeouts are 180 seconds; Axo's operation budget must be shorter and
 its timeout/cancellation contract must prevent a late attach after detach.
 Both pod roles default to a 210-second termination grace period, exceeding the
-180-second sidecar and 120-second Axo/node-command budgets. Keep the grace period
-above the longest operation deadline when adjusting those budgets.
+180-second sidecar and 120-second Axo budgets. Node commands have no independent
+kill timeout: an operation survives RPC cancellation until its process exits,
+and shutdown waits for those effects. The process lock is inherited by child
+commands so a replacement driver cannot clear recovery state while an old
+command still runs. A kernel-blocked command can outlive the pod's grace period;
+210 seconds, SIGKILL and absence from mountinfo are not proof that writes ended.
+Resolve the device/kernel failure or positively fence the old incarnation before
+allowing ownership to move.
+
+In `attach`, the legacy provisioner still creates blank images for ordinary new
+Filesystem PVCs; ceph-csi normally formats them at its first NodeStage. A newly
+allocated but never-staged legacy image therefore cannot be sent to the QEMU
+pool. Keep such PVC consumers on legacy nodes until initialization is positively
+verified, or hand provisioning to a backend that owns and journals safe initial
+formatting before enabling new-pool scheduling. Never infer permission to format
+an adopted image from an empty filesystem probe. Raw Block and already formatted
+clones have different initialization requirements. This gate must be enforced by
+the platform's admission/scheduling flow, not left to a human watching roll logs.
 
 Example for a lab only, once those conditions hold:
 
@@ -172,12 +245,17 @@ uncertain attach results, orphan attachments, or lost ownership proof.
 Coexistence needs a defined resize contract: legacy ceph-csi can resize RBD
 without telling QEMU. Do not permit resize of already migrated volumes until
 Axo updates QEMU capacity as part of that path, or deliberately transfers the
-resizer role with a controller able to serve both pools. Neither the chart nor
-Helm provides that coordination.
+resizer role with a controller able to serve both pools. The platform must reject
+size-changing PVC updates for affected volumes while this gate is active, through
+admission or an equivalent enforced policy. Neither the chart nor Helm provides
+that coordination. The resizer disables its pod-cache/in-use workaround because
+the backend contract requires online growth; a backend requiring offline resize
+does not satisfy this deployment contract.
 
 Before `final`, adopt existing images, outstanding reservations and snapshot/
 clone journals, validate create/delete/expand/snapshot/restore and rollback,
-then stop the remaining legacy sidecars and verify each lease before enabling
+then stop the remaining legacy sidecars and the `csi-rbdplugin-controller`
+reconciler, and wait for each prior lease to expire before enabling
 its new counterpart. `deploy/values-final.yaml` is only for this completed
 handoff; it does not install snapshot CRDs or snapshot-controller. Revoke/rotate
 old cephx credentials in Ceph after all legacy users are gone; emptying a Secret
@@ -194,6 +272,12 @@ negotiate or verify the proposed dated REST contract.
 Rollback requires a new node generation and a cold handoff to the legacy path,
 with consistent credentials, journals and fencing. Reversing a label or rolling
 back a Helm release cannot safely move an attached disk.
+
+For a node-plugin image upgrade, `OnDelete` leaves existing pods on their old
+image. Cordon and drain one node, verify unpublish/unstage and backend release,
+then delete that node's DaemonSet pod. Check its replacement image digest,
+registrar, CSINode and disposable volume before uncordoning and moving to the
+next node. Never delete all node-plugin pods together to force an update.
 
 ## Axo catalog bundles
 
@@ -249,3 +333,7 @@ referenced CSI Secrets in the release namespace. If legacy PVs reference
 Secrets elsewhere, define separately reviewed namespace-specific RoleBindings
 rather than granting cluster-wide Secret access. The Biscuit itself is mounted
 by kubelet and does not need an API Secret-read grant.
+
+Sidecar HTTP metrics endpoints are not enabled by this chart. Add a reviewed
+metrics configuration and monitoring integration before relying on sidecar
+metrics for an operational acceptance criterion.

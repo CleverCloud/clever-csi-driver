@@ -3,9 +3,11 @@ driverName: rbd.csi.ceph.com
 image:
   repository: ghcr.io/clevercloud/clever-csi-driver
   tag: v0.1.0
+  # Set a registry digest to pin the exact tested image; overrides tag.
+  digest: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
-# Exceeds the 180s sidecar deadline and 120s Axo/node command budgets.
+# Exceeds sidecar/Axo deadlines; never proves a blocked kernel operation ended.
 terminationGracePeriodSeconds: 210
 # No Namespace, CSIDriver, StorageClass, Secret or snapshot CRD is owned by this chart.
 controller:

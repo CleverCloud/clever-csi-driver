@@ -23,6 +23,8 @@ def status(port, endpoint):
 
 
 def smoke(image):
+    results = Path(__file__).resolve().parents[1] / "test-results"
+    results.mkdir(exist_ok=True)
     help_text = docker("run", "--rm", "--network=none", image, "--help").stdout
     assert "--node-id-file" in help_text and "--organisation-id" in help_text
     for arguments in [["--mode=controller"], ["--mode=node", "--node-id="]]:
@@ -31,7 +33,7 @@ def smoke(image):
     docker("run", "--rm", "--network=none", "--entrypoint", "sh", image, "-c",
            'for tool in mount umount blkid blockdev xfs_growfs resize2fs; do command -v "$tool" || exit 1; done')
     for mode in ["node", "controller"]:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir=results) as directory:
             token = Path(directory) / "token"
             token.write_text("fixture-token-not-a-credential")
             token.chmod(0o444)

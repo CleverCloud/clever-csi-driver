@@ -5,7 +5,8 @@ Linux node plugin. Both roles use the same binary and container image.
 
 This repository provides the driver, Helm chart and manifests for Axo.
 **The current controller implements the historical `clever-csi-v1` HTTP
-contract (implementation baseline `339e7f0`).** It reports readiness only when
+contract ([wire specification](docs/axo-api-v1.md), implementation baseline
+`339e7f0`).** It reports readiness only when
 the backend advertises that contract's required capabilities. The corresponding
 Axo/Supernova backend still requires implementation and integration validation.
 
@@ -37,8 +38,9 @@ flowchart LR
 - Durable node state, process locking, mount ownership checks and recovery after
   device re-enumeration when no conflicting mounts remain.
 - Disk discovery by exact serial, independent of `/dev/sdX` enumeration order.
-- No Ceph credentials or Axo token in the node plugin. The controller reads its
-  projected token for each request to support rotation.
+- No Ceph client or Axo token is needed by the node plugin. Existing PV Secret
+  references can still make kubelet deliver cephx credentials in CSI requests;
+  the driver ignores them. The controller rereads its projected Axo token.
 
 `ListVolumes`, `GetCapacity`, mutable volume attributes, topology and group
 snapshots are not advertised. See the [Axo REST proposal](docs/axo-api.md) and
@@ -70,7 +72,8 @@ The current client requires Axo to route historical ceph-csi node IDs through
 Filesystem publications retain all applicable read-only constraints. A read-only
 Block publication requires a read-only attachment and a guest device confirmed
 read-only; a read-only bind mount alone cannot enforce this. Filesystem mounts
-always use `nosuid,nodev`. Review these policies in the
+use `nosuid,nodev` in the driver's mount namespace; container-runtime bind mounts
+can change the effective flags seen inside the pod. Review these policies in the
 [operations guide](docs/operations.md#mount-and-recovery-policy) before migration.
 
 ## Build and test
@@ -86,6 +89,8 @@ cargo build --release --locked
 docker build -t clever-csi-driver:dev .
 # Real Linux mounts in a disposable privileged Docker container:
 bash deploy/test_linux.sh
+# CSI conformance against a local Axo fixture and real Linux loop devices:
+bash deploy/test_linux.sh sanity
 ```
 
 Controller contract tests use a mock Axo server for the historical
