@@ -7,15 +7,17 @@ mod tests;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fs::{File, OpenOptions},
+    future::Future,
     io::Write,
+    os::fd::AsRawFd,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex as StdMutex},
+    time::Instant,
 };
 
-use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tonic::{Request, Response, Status};
 
 use crate::csi;
@@ -57,7 +59,7 @@ struct Spec {
     access_mode: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Volume {
     serial: String,
     device: Device,
@@ -73,13 +75,38 @@ struct Registry {
     volumes: BTreeMap<String, Volume>,
 }
 
+#[derive(Clone)]
 pub struct NodeService {
     config: NodeConfig,
-    // Serialize operations, including the device/mount checks, with their effects.
-    // Persist intent before each effect so cancellation/crash is retryable.
-    registry: Mutex<Registry>,
+    registry: Arc<Mutex<Registry>>,
+    operations: Arc<StdMutex<BTreeSet<String>>>,
+    idle: Arc<Notify>,
     host: Arc<dyn Host>,
-    _process_lock: Flock<File>,
+    _process_lock: Arc<File>,
+}
+
+struct OperationGuard {
+    id: String,
+    operations: Arc<StdMutex<BTreeSet<String>>>,
+    idle: Arc<Notify>,
+}
+
+impl Drop for OperationGuard {
+    fn drop(&mut self) {
+        self.operations
+            .lock()
+            .expect("operation registry")
+            .remove(&self.id);
+        self.idle.notify_waiters();
+    }
+}
+
+async fn blocking<T: Send + 'static>(
+    action: impl FnOnce() -> Result<T, Status> + Send + 'static,
+) -> Result<T, Status> {
+    tokio::task::spawn_blocking(action)
+        .await
+        .map_err(|_| Status::aborted("node filesystem operation did not complete"))?
 }
 
 fn validate_token(value: &str, field: &str, max: usize) -> Result<(), Status> {
@@ -152,7 +179,6 @@ fn target_path(value: &str, root: &Path) -> Result<PathBuf, Status> {
             "volume path must be a clean absolute descendant of kubelet_root",
         ));
     }
-    no_symlinks(&path)?;
     Ok(path)
 }
 
@@ -341,8 +367,14 @@ impl NodeService {
             .mode(0o600)
             .custom_flags(nix::libc::O_NOFOLLOW)
             .open(config.state_dir.join("node.lock"))?;
-        let lock =
-            Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|_| NodeError::Locked)?;
+        // Children inherit this open file description. Closing the last copy,
+        // rather than explicit LOCK_UN, releases ownership after a crash.
+        if unsafe { nix::libc::flock(file.as_raw_fd(), nix::libc::LOCK_EX | nix::libc::LOCK_NB) }
+            != 0
+        {
+            return Err(NodeError::Locked);
+        }
+        let lock = Arc::new(file);
         let state_path = config.state_dir.join("registry.json");
         no_symlinks(&state_path).map_err(|e| NodeError::Configuration(e.message().to_owned()))?;
         let registry: Registry = match std::fs::read(&state_path) {
@@ -371,10 +403,13 @@ impl NodeService {
         let host = Arc::new(LinuxHost {
             device_root: config.device_root.clone(),
             sys_block_dir: config.sys_block_dir.clone(),
+            process_lock: lock.clone(),
         });
         let service = Self {
             config,
-            registry: Mutex::new(registry.clone()),
+            registry: Arc::new(Mutex::new(registry.clone())),
+            operations: Arc::new(StdMutex::new(BTreeSet::new())),
+            idle: Arc::new(Notify::new()),
             host,
             _process_lock: lock,
         };
@@ -398,14 +433,119 @@ impl NodeService {
         File::open(&self.config.state_dir)?.sync_all()
     }
 
-    fn update(&self, current: &mut Registry, next: Registry) -> Result<(), Status> {
-        self.persist(&next)
-            .map_err(|e| Status::internal(format!("persist node state: {e}")))?;
-        *current = next;
+    async fn update(&self, current: &mut Registry, next: Registry) -> Result<(), Status> {
+        let previous = current.clone();
+        let mut actual = self.registry.clone().lock_owned().await;
+        let service = self.clone();
+        let merged = blocking(move || {
+            let mut merged = actual.clone();
+            let ids: BTreeSet<_> = previous.volumes.keys().chain(next.volumes.keys()).collect();
+            for id in ids {
+                if previous.volumes.get(id) == next.volumes.get(id) {
+                    continue;
+                }
+                if actual.volumes.get(id) != previous.volumes.get(id) {
+                    return Err(Status::aborted(
+                        "volume registration changed during operation",
+                    ));
+                }
+                match next.volumes.get(id) {
+                    Some(volume) => {
+                        merged.volumes.insert(id.clone(), volume.clone());
+                    }
+                    None => {
+                        merged.volumes.remove(id);
+                    }
+                }
+            }
+            for (id, volume) in &merged.volumes {
+                Self::require_unclaimed_path(&merged, &volume.staging_path, id, true)?;
+                for path in volume.published.keys() {
+                    Self::require_unclaimed_path(&merged, path, id, false)?;
+                }
+                if merged.volumes.iter().any(|(other_id, other)| {
+                    other_id != id
+                        && (other.serial == volume.serial
+                            || (other.device.major, other.device.minor)
+                                == (volume.device.major, volume.device.minor))
+                }) {
+                    return Err(Status::aborted(
+                        "device registration is reserved by another volume",
+                    ));
+                }
+            }
+            service
+                .persist(&merged)
+                .map_err(|e| Status::aborted(format!("persist node state: {e}")))?;
+            *actual = merged.clone();
+            Ok(merged)
+        })
+        .await?;
+        *current = merged;
         Ok(())
     }
 
-    fn path(&self, value: &str) -> Result<PathBuf, Status> {
+    fn claim(&self, id: &str) -> Result<OperationGuard, Status> {
+        if !self
+            .operations
+            .lock()
+            .expect("operation registry")
+            .insert(id.to_owned())
+        {
+            return Err(Status::aborted(
+                "another operation is still running for this volume",
+            ));
+        }
+        Ok(OperationGuard {
+            id: id.to_owned(),
+            operations: self.operations.clone(),
+            idle: self.idle.clone(),
+        })
+    }
+
+    async fn run<
+        T: Send + 'static,
+        F: Future<Output = Result<Response<T>, Status>> + Send + 'static,
+    >(
+        &self,
+        name: &'static str,
+        id: String,
+        operation: impl FnOnce(Self) -> F + Send + 'static,
+    ) -> Result<Response<T>, Status> {
+        validate_volume_id(&id)?;
+        let guard = self.claim(&id)?;
+        let service = self.clone();
+        // Dropping the RPC only detaches this task. Its lock covers the actual
+        // command termination and durable state update, including on timeout.
+        tokio::spawn(async move {
+            let _guard = guard;
+            let started = Instant::now();
+            let result = operation(service).await;
+            if let Err(error) = &result {
+                tracing::warn!(operation = name, code = ?error.code(), elapsed_ms = started.elapsed().as_millis(), "node operation failed");
+            }
+            result
+        })
+        .await
+        .map_err(|_| Status::aborted("node operation did not complete"))?
+    }
+
+    pub async fn drain(&self) {
+        loop {
+            let notified = self.idle.notified();
+            if self
+                .operations
+                .lock()
+                .expect("operation registry")
+                .is_empty()
+            {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    fn lexical_path(&self, value: &str) -> Result<PathBuf, Status> {
         let path = target_path(value, &self.config.kubelet_root)?;
         if path.starts_with(&self.config.state_dir) || self.config.state_dir.starts_with(&path) {
             return Err(Status::invalid_argument(
@@ -413,6 +553,27 @@ impl NodeService {
             ));
         }
         Ok(path)
+    }
+
+    async fn path(&self, value: &str) -> Result<PathBuf, Status> {
+        let path = self.lexical_path(value)?;
+        blocking(move || {
+            no_symlinks(&path)?;
+            Ok(path)
+        })
+        .await
+    }
+
+    async fn cleanup_path(&self, path: &Path, mounted: bool) -> Result<(), Status> {
+        // A mounted filesystem may return EIO from getattr during shutdown.
+        // Its identity is verified through mountinfo, without entering it.
+        let inspect = if mounted {
+            path.parent().unwrap_or(path)
+        } else {
+            path
+        }
+        .to_owned();
+        blocking(move || no_symlinks(&inspect)).await
     }
 
     fn require_unclaimed_path(
@@ -449,16 +610,28 @@ impl NodeService {
         Ok(device)
     }
 
-    fn require_no_device_mounts(
+    async fn require_no_device_mounts(
         &self,
         mounts: &[Mount],
         devices: &[&Device],
         paths: &[&Path],
     ) -> Result<(), Status> {
+        let mut device_filesystems = BTreeSet::new();
+        for device in devices {
+            if let Some(identity) = self.host.device_filesystem(device).await? {
+                device_filesystems.insert(identity);
+            }
+        }
         for mount in mounts {
             // For a raw block bind, mountinfo describes devtmpfs, while the
             // target inode's st_rdev identifies the actual volume device.
-            let raw_device = self.host.block_identity(&mount.target)?;
+            let raw_device = if matches!(mount.fs_type.as_str(), "devtmpfs" | "tmpfs")
+                || device_filesystems.contains(&(mount.major, mount.minor))
+            {
+                self.host.block_identity(&mount.target).await?
+            } else {
+                None
+            };
             if paths.iter().any(|path| mount.target.starts_with(path))
                 || devices.iter().any(|device| {
                     (mount.major, mount.minor) == (device.major, device.minor)
@@ -475,54 +648,77 @@ impl NodeService {
 
     async fn reconcile_conflicting_registrations(
         &self,
-        registry: &mut Registry,
+        next: &mut Registry,
         owner: &str,
         device: &Device,
-    ) -> Result<(), Status> {
-        let mut next = registry.clone();
-        let mut changed = false;
-        for (id, volume) in &mut next.volumes {
-            if id == owner
-                || (volume.device.major, volume.device.minor) != (device.major, device.minor)
-            {
-                continue;
-            }
-            let current = self.host.discover(&volume.serial).await?;
-            if (current.major, current.minor) == (device.major, device.minor) {
-                return Err(Status::already_exists("device is staged as another volume"));
-            }
-            let paths: Vec<&Path> = std::iter::once(volume.staging_path.as_path())
-                .chain(volume.published.keys().map(PathBuf::as_path))
+    ) -> Result<Vec<OperationGuard>, Status> {
+        let mut guards = Vec::new();
+        let mut resolved = BTreeSet::new();
+        let mut pending = vec![device.clone()];
+        while let Some(candidate) = pending.pop() {
+            let conflicts: Vec<_> = next
+                .volumes
+                .iter()
+                .filter(|(id, volume)| {
+                    id.as_str() != owner
+                        && !resolved.contains(id.as_str())
+                        && (volume.device.major, volume.device.minor)
+                            == (candidate.major, candidate.minor)
+                })
+                .map(|(id, volume)| (id.clone(), volume.clone()))
                 .collect();
-            self.require_no_device_mounts(
-                &self.host.mounts().await?,
-                &[&volume.device, &current],
-                &paths,
-            )?;
-            // Reconcile the displaced volume *before* mounting this one. This
-            // handles disk-order permutations without interpreting our new mount
-            // as the displaced volume's old mount on its later Stage retry.
-            volume.device = current;
-            changed = true;
+            for (id, mut volume) in conflicts {
+                guards.push(self.claim(&id)?);
+                resolved.insert(id.clone());
+                let current = match self.host.discover(&volume.serial).await {
+                    Ok(current) => Some(current),
+                    Err(status) if status.code() == tonic::Code::Unavailable => None,
+                    Err(status) => return Err(status),
+                };
+                if current.as_ref().is_some_and(|current| {
+                    (current.major, current.minor) == (candidate.major, candidate.minor)
+                }) {
+                    return Err(Status::already_exists("device is staged as another volume"));
+                }
+                let paths: Vec<&Path> = std::iter::once(volume.staging_path.as_path())
+                    .chain(volume.published.keys().map(PathBuf::as_path))
+                    .collect();
+                let mut devices = vec![&volume.device];
+                if let Some(current) = &current {
+                    devices.push(current);
+                }
+                self.require_no_device_mounts(&self.host.mounts().await?, &devices, &paths)
+                    .await?;
+                if let Some(current) = current {
+                    self.host.ensure_released(&current).await?;
+                    pending.push(current.clone());
+                    volume.device = current;
+                    next.volumes.insert(id, volume);
+                } else {
+                    next.volumes.remove(&id);
+                }
+            }
         }
-        if changed {
-            self.update(registry, next)?;
-        }
-        Ok(())
+        Ok(guards)
     }
 
     async fn device_for_cleanup(&self, volume: &Volume) -> Result<(), Status> {
-        match self.current_device(volume).await {
+        match self.host.discover(&volume.serial).await {
             Ok(_) => Ok(()),
             // Hot-unplug can remove sysfs before kubelet requests cleanup. The
-            // caller must still match the recorded mount identity; any present
-            // but replaced/ambiguous device is a hard failure.
+            // caller must still match the recorded mount identity. A new device
+            // for this serial must not prevent removing the old owned mounts.
             Err(status) if status.code() == tonic::Code::Unavailable => Ok(()),
             Err(status) => Err(status),
         }
     }
 
-    fn verify_mount(&self, volume: &Volume, mount: &Mount, path: &Path) -> Result<(), Status> {
+    async fn verify_mount(
+        &self,
+        volume: &Volume,
+        mount: &Mount,
+        path: &Path,
+    ) -> Result<(), Status> {
         match &volume.spec.mode {
             Mode::Filesystem(fs_type)
                 if mount.major == volume.device.major
@@ -533,7 +729,7 @@ impl NodeService {
                 Ok(())
             }
             Mode::Block
-                if self.host.block_identity(path)?
+                if self.host.block_identity(path).await?
                     == Some((volume.device.major, volume.device.minor)) =>
             {
                 Ok(())
@@ -561,54 +757,66 @@ impl NodeService {
         Ok(())
     }
 
-    fn create_directory(&self, path: &Path) -> Result<(), Status> {
-        no_symlinks(path)?;
-        std::fs::create_dir_all(path)
-            .map_err(|e| Status::internal(format!("create volume directory: {e}")))?;
-        no_symlinks(path)
+    async fn create_directory(&self, path: &Path) -> Result<(), Status> {
+        let path = path.to_owned();
+        blocking(move || {
+            no_symlinks(&path)?;
+            std::fs::create_dir_all(&path)
+                .map_err(|e| Status::internal(format!("create volume directory: {e}")))?;
+            no_symlinks(&path)
+        })
+        .await
     }
 
-    fn remove_publish_target(&self, volume: &Volume, target: &Path) -> Result<(), Status> {
-        // Only called for a persisted publication after verifying that no mounts
-        // remain. Never follow symlinks or recursively delete content.
-        no_symlinks(target)?;
-        let metadata = match std::fs::symlink_metadata(target) {
-            Ok(metadata) => Some(metadata),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(Status::internal(format!("inspect publish target: {error}"))),
-        };
-        if let Some(metadata) = metadata {
-            let removed = match volume.spec.mode {
-                Mode::Filesystem(_) if metadata.is_dir() => std::fs::remove_dir(target),
-                Mode::Block if metadata.is_file() && metadata.len() == 0 => {
-                    std::fs::remove_file(target)
-                }
-                _ => {
-                    return Err(Status::failed_precondition(
-                        "publish target is not an empty owned placeholder",
-                    ));
+    async fn remove_publish_target(&self, volume: &Volume, target: &Path) -> Result<(), Status> {
+        let volume = volume.clone();
+        let target = target.to_owned();
+        blocking(move || {
+            let target = target.as_path();
+            // Only called for a persisted publication after verifying that no mounts
+            // remain. Never follow symlinks or recursively delete content.
+            no_symlinks(target)?;
+            let metadata = match std::fs::symlink_metadata(target) {
+                Ok(metadata) => Some(metadata),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => {
+                    return Err(Status::internal(format!("inspect publish target: {error}")));
                 }
             };
-            removed.map_err(|_| {
-                Status::failed_precondition(
-                    "cannot remove publish target; it must be empty and unmounted",
-                )
-            })?;
-        }
-        // Also sync on retry after a successful unlink but failed directory
-        // fsync. Only then may the durable publication intent be forgotten.
-        if let Some(parent) = target.parent() {
-            match File::open(parent) {
-                Ok(directory) => directory.sync_all().map_err(|error| {
-                    Status::internal(format!("persist target removal: {error}"))
-                })?,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-                Err(error) => {
-                    return Err(Status::internal(format!("persist target removal: {error}")));
+            if let Some(metadata) = metadata {
+                let removed = match volume.spec.mode {
+                    Mode::Filesystem(_) if metadata.is_dir() => std::fs::remove_dir(target),
+                    Mode::Block if metadata.is_file() && metadata.len() == 0 => {
+                        std::fs::remove_file(target)
+                    }
+                    _ => {
+                        return Err(Status::failed_precondition(
+                            "publish target is not an empty owned placeholder",
+                        ));
+                    }
+                };
+                removed.map_err(|_| {
+                    Status::failed_precondition(
+                        "cannot remove publish target; it must be empty and unmounted",
+                    )
+                })?;
+            }
+            // Also sync on retry after a successful unlink but failed directory
+            // fsync. Only then may the durable publication intent be forgotten.
+            if let Some(parent) = target.parent() {
+                match File::open(parent) {
+                    Ok(directory) => directory.sync_all().map_err(|error| {
+                        Status::internal(format!("persist target removal: {error}"))
+                    })?,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                    Err(error) => {
+                        return Err(Status::internal(format!("persist target removal: {error}")));
+                    }
                 }
             }
-        }
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     async fn stage_mount(&self, volume: &Volume) -> Result<(), Status> {
@@ -619,7 +827,8 @@ impl NodeService {
                     "block staging directory unexpectedly mounted",
                 ));
             }
-            self.verify_mount(volume, mount, &volume.staging_path)?;
+            self.verify_mount(volume, mount, &volume.staging_path)
+                .await?;
             Self::verify_mount_flags(mount, &volume.spec.flags)?;
             return Ok(());
         }
@@ -631,7 +840,7 @@ impl NodeService {
                 "staging path contains other mounts",
             ));
         }
-        self.create_directory(&volume.staging_path)?;
+        self.create_directory(&volume.staging_path).await?;
         if let Mode::Filesystem(fs_type) = &volume.spec.mode {
             self.host
                 .mount_fs(
@@ -644,14 +853,34 @@ impl NodeService {
             let mounts = self.host.mounts().await?;
             let mount = unique_mount(&mounts, &volume.staging_path)?
                 .ok_or_else(|| Status::internal("mount command succeeded without staging mount"))?;
-            self.verify_mount(volume, mount, &volume.staging_path)?;
+            self.verify_mount(volume, mount, &volume.staging_path)
+                .await?;
             Self::verify_mount_flags(mount, &volume.spec.flags)?;
         }
         Ok(())
     }
 
     async fn checked_volume_path(&self, volume: &Volume, path: &Path) -> Result<(), Status> {
-        if path != volume.staging_path && !volume.published.contains_key(path) {
+        let block_alias = if matches!(volume.spec.mode, Mode::Block) {
+            let base = self
+                .config
+                .kubelet_root
+                .join("plugins/kubernetes.io/csi/volumeDevices");
+            path.strip_prefix(&base).ok().is_some_and(|relative| {
+                let parts: Vec<_> = relative.components().collect();
+                parts.len() == 3
+                    && parts[1].as_os_str() == "dev"
+                    && volume.published.contains_key(
+                        &base
+                            .join("publish")
+                            .join(parts[0].as_os_str())
+                            .join(parts[2].as_os_str()),
+                    )
+            })
+        } else {
+            false
+        };
+        if path != volume.staging_path && !volume.published.contains_key(path) && !block_alias {
             return Err(Status::not_found("path is not registered for this volume"));
         }
         self.current_device(volume).await?;
@@ -666,26 +895,24 @@ impl NodeService {
         }
         let mount = unique_mount(&mounts, path)?
             .ok_or_else(|| Status::not_found("volume path is not mounted"))?;
-        self.verify_mount(volume, mount, path)
+        self.verify_mount(volume, mount, path).await
     }
 }
 
-#[tonic::async_trait]
-impl csi::node_server::Node for NodeService {
-    async fn node_stage_volume(
+impl NodeService {
+    async fn stage_volume(
         &self,
         request: Request<csi::NodeStageVolumeRequest>,
     ) -> Result<Response<csi::NodeStageVolumeResponse>, Status> {
         let request = request.into_inner();
-        validate_volume_id(&request.volume_id)?;
-        let path = self.path(&request.staging_target_path)?;
+        let path = self.path(&request.staging_target_path).await?;
         let serial = request
             .publish_context
             .get("device_serial")
             .ok_or_else(|| Status::invalid_argument("publish_context.device_serial is required"))?;
         validate_serial(serial)?;
         let spec = spec(request.volume_capability.as_ref(), &request.publish_context)?;
-        let mut registry = self.registry.lock().await;
+        let mut registry = self.registry.lock().await.clone();
         Self::require_unclaimed_path(&registry, &path, &request.volume_id, true)?;
         let device = self.host.discover(serial).await?;
         if registry
@@ -704,67 +931,87 @@ impl csi::node_server::Node for NodeService {
                 "device lacks the expected preformatted filesystem; formatting is forbidden, including for adopted volumes",
             ));
         }
-        if let Some(existing) = registry.volumes.get(&request.volume_id)
+        let previous = registry.volumes.get(&request.volume_id).cloned();
+        if let Some(existing) = &previous
             && (existing.serial != *serial
                 || existing.staging_path != path
-                || existing.spec != spec)
+                || existing.spec.mode != spec.mode
+                || existing.spec.access_mode != spec.access_mode)
         {
             return Err(Status::already_exists(
                 "volume is staged with different parameters",
             ));
         }
-        // Historical coordinates of another volume may now belong to this
-        // serial. Resolve and safely persist that other identity before mounting.
-        self.reconcile_conflicting_registrations(&mut registry, &request.volume_id, &device)
+        let mut next = registry.clone();
+        let _conflicts = self
+            .reconcile_conflicting_registrations(&mut next, &request.volume_id, &device)
             .await?;
-        let volume = if let Some(existing) = registry.volumes.get(&request.volume_id) {
-            let mut volume = existing.clone();
-            if volume.device != device {
-                // A reboot may change /dev names and dev_t. Serial remains the
-                // authority, but an old or foreign mount must never be rebound
-                // to the newly enumerated device, even when state says otherwise.
+        let volume = if let Some(mut volume) = previous.clone() {
+            if volume.device != device || volume.spec != spec {
                 let mounts = self.host.mounts().await?;
                 let paths: Vec<&Path> = std::iter::once(volume.staging_path.as_path())
                     .chain(volume.published.keys().map(PathBuf::as_path))
                     .collect();
-                self.require_no_device_mounts(&mounts, &[&volume.device, &device], &paths)?;
+                self.require_no_device_mounts(&mounts, &[&volume.device, &device], &paths)
+                    .await?;
+                self.host.ensure_released(&device).await?;
                 volume.device = device;
-                let mut next = registry.clone();
-                next.volumes
-                    .insert(request.volume_id.clone(), volume.clone());
-                self.update(&mut registry, next)?;
+                volume.spec = spec;
             }
             volume
         } else {
-            // Do not take ownership of mounts created outside this state registry.
-            let mounts = self.host.mounts().await?;
-            self.require_no_device_mounts(&mounts, &[&device], &[&path])?;
-            let volume = Volume {
+            self.require_no_device_mounts(&self.host.mounts().await?, &[&device], &[&path])
+                .await?;
+            self.host.ensure_released(&device).await?;
+            Volume {
                 serial: serial.clone(),
                 device,
                 staging_path: path,
                 spec,
                 published: BTreeMap::new(),
-            };
-            let mut next = registry.clone();
-            next.volumes.insert(request.volume_id, volume.clone());
-            self.update(&mut registry, next)?;
-            volume
+            }
         };
-        self.stage_mount(&volume).await?;
+        next.volumes
+            .insert(request.volume_id.clone(), volume.clone());
+        self.update(&mut registry, next).await?;
+        if let Err(error) = self.stage_mount(&volume).await {
+            // A final CSI error promises that no uncertain effect needs an
+            // inverse operation. Only make that promise after proving rollback.
+            let rollback = async {
+                if previous.is_some() {
+                    return Err(Status::aborted("staging recovery is incomplete"));
+                }
+                self.require_no_device_mounts(
+                    &self.host.mounts().await?,
+                    &[&volume.device],
+                    &[&volume.staging_path],
+                )
+                .await?;
+                self.host.ensure_released(&volume.device).await?;
+                let mut next = registry.clone();
+                next.volumes.remove(&request.volume_id);
+                self.update(&mut registry, next).await
+            }
+            .await;
+            return Err(if rollback.is_ok() {
+                error
+            } else {
+                Status::aborted("staging effect requires retry or cleanup")
+            });
+        }
         Ok(Response::new(csi::NodeStageVolumeResponse {}))
     }
 
-    async fn node_publish_volume(
+    async fn publish_volume(
         &self,
         request: Request<csi::NodePublishVolumeRequest>,
     ) -> Result<Response<csi::NodePublishVolumeResponse>, Status> {
         let request = request.into_inner();
         validate_volume_id(&request.volume_id)?;
-        let target = self.path(&request.target_path)?;
-        let staging = self.path(&request.staging_target_path)?;
+        let target = self.path(&request.target_path).await?;
+        let staging = self.path(&request.staging_target_path).await?;
         let desired = spec(request.volume_capability.as_ref(), &request.publish_context)?;
-        let mut registry = self.registry.lock().await;
+        let mut registry = self.registry.lock().await.clone();
         let volume = registry
             .volumes
             .get(&request.volume_id)
@@ -803,90 +1050,152 @@ impl csi::node_server::Node for NodeService {
         )?;
         let mounts = self.host.mounts().await?;
         let existing_mount = unique_mount(&mounts, &target)?;
+        let registered = volume.published.contains_key(&target);
         if let Some(previous) = volume.published.get(&target) {
             if *previous != readonly {
                 return Err(Status::already_exists(
                     "target was published with different read-only mode",
                 ));
             }
-        } else {
-            if existing_mount.is_some()
-                || mounts.iter().any(|mount| mount.target.starts_with(&target))
-            {
-                return Err(Status::failed_precondition(
-                    "unregistered mount exists at publish target",
-                ));
-            }
+        } else if existing_mount.is_some()
+            || mounts.iter().any(|mount| mount.target.starts_with(&target))
+        {
+            return Err(Status::failed_precondition(
+                "unregistered mount exists at publish target",
+            ));
+        }
+        if !registered {
             let mut next = registry.clone();
             next.volumes
                 .get_mut(&request.volume_id)
                 .expect("registered volume")
                 .published
                 .insert(target.clone(), readonly);
-            self.update(&mut registry, next)?;
+            self.update(&mut registry, next).await?;
         }
-        if let Some(mount) = existing_mount {
-            self.verify_mount(&volume, mount, &target)?;
-            // Complete a bind whose remount was interrupted after the bind syscall.
-            self.host.remount_bind(&target, &publish_flags).await?;
-        } else {
-            let source = match volume.spec.mode {
-                Mode::Filesystem(_) => {
-                    self.create_directory(&target)?;
-                    staging
-                }
-                Mode::Block => {
-                    self.create_directory(
-                        target
-                            .parent()
-                            .ok_or_else(|| Status::invalid_argument("target has no parent"))?,
-                    )?;
-                    no_symlinks(&target)?;
-                    match std::fs::symlink_metadata(&target) {
-                        Ok(metadata) if !metadata.is_file() || metadata.len() != 0 => {
-                            return Err(Status::failed_precondition(
-                                "block target must be an empty regular file",
-                            ));
-                        }
-                        Ok(_) => (),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                            OpenOptions::new()
-                                .write(true)
-                                .create_new(true)
-                                .mode(0o600)
-                                .custom_flags(nix::libc::O_NOFOLLOW)
-                                .open(&target)
+        let mut prepared = false;
+        let effect = async {
+            let source = if existing_mount.is_none() {
+                match volume.spec.mode {
+                    Mode::Filesystem(_) => {
+                        self.create_directory(&target).await?;
+                        let directory = target.clone();
+                        blocking(move || {
+                            if std::fs::read_dir(directory)
                                 .map_err(|e| {
-                                    Status::internal(format!("create block target: {e}"))
-                                })?;
-                        }
-                        Err(error) => {
-                            return Err(Status::internal(format!("inspect block target: {error}")));
-                        }
+                                    Status::internal(format!("inspect publish directory: {e}"))
+                                })?
+                                .next()
+                                .is_some()
+                            {
+                                return Err(Status::failed_precondition(
+                                    "filesystem target must be an empty directory",
+                                ));
+                            }
+                            Ok(())
+                        })
+                        .await?;
+                        staging
                     }
-                    volume.device.path.clone()
+                    Mode::Block => {
+                        self.create_directory(
+                            target
+                                .parent()
+                                .ok_or_else(|| Status::invalid_argument("target has no parent"))?,
+                        )
+                        .await?;
+                        let file_path = target.clone();
+                        blocking(move || {
+                            no_symlinks(&file_path)?;
+                            match std::fs::symlink_metadata(&file_path) {
+                                Ok(metadata) if !metadata.is_file() || metadata.len() != 0 => {
+                                    Err(Status::failed_precondition(
+                                        "block target must be an empty regular file",
+                                    ))
+                                }
+                                Ok(_) => Ok(()),
+                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                                    OpenOptions::new()
+                                        .write(true)
+                                        .create_new(true)
+                                        .mode(0o600)
+                                        .custom_flags(nix::libc::O_NOFOLLOW)
+                                        .open(&file_path)
+                                        .map_err(|e| {
+                                            Status::internal(format!("create block target: {e}"))
+                                        })?;
+                                    Ok(())
+                                }
+                                Err(error) => {
+                                    Err(Status::internal(format!("inspect block target: {error}")))
+                                }
+                            }
+                        })
+                        .await?;
+                        volume.device.path.clone()
+                    }
                 }
+            } else {
+                staging
             };
-            self.host.bind(&source, &target, &publish_flags).await?;
+            prepared = true;
+            if let Some(mount) = existing_mount {
+                self.verify_mount(&volume, mount, &target).await?;
+                self.host.remount_bind(&target, &publish_flags).await?;
+            } else {
+                self.host.bind(&source, &target, &publish_flags).await?;
+            }
+            let mounts = self.host.mounts().await?;
+            let mount = unique_mount(&mounts, &target)?
+                .ok_or_else(|| Status::internal("publish command succeeded without mount"))?;
+            self.verify_mount(&volume, mount, &target).await?;
+            Self::verify_mount_flags(mount, &publish_flags)
         }
-        let mounts = self.host.mounts().await?;
-        let mount = unique_mount(&mounts, &target)?
-            .ok_or_else(|| Status::internal("publish command succeeded without mount"))?;
-        self.verify_mount(&volume, mount, &target)?;
-        Self::verify_mount_flags(mount, &publish_flags)?;
+        .await;
+        if let Err(error) = effect {
+            let rollback = async {
+                if registered
+                    || self
+                        .host
+                        .mounts()
+                        .await?
+                        .iter()
+                        .any(|mount| mount.target.starts_with(&target))
+                {
+                    return Err(Status::aborted("publication recovery is incomplete"));
+                }
+                if prepared {
+                    self.remove_publish_target(&volume, &target).await?;
+                }
+                let mut next = registry.clone();
+                next.volumes
+                    .get_mut(&request.volume_id)
+                    .expect("registered volume")
+                    .published
+                    .remove(&target);
+                self.update(&mut registry, next).await
+            }
+            .await;
+            return Err(if rollback.is_ok() {
+                error
+            } else {
+                Status::aborted("publication effect requires retry or cleanup")
+            });
+        }
         Ok(Response::new(csi::NodePublishVolumeResponse {}))
     }
 
-    async fn node_unpublish_volume(
+    async fn unpublish_volume(
         &self,
         request: Request<csi::NodeUnpublishVolumeRequest>,
     ) -> Result<Response<csi::NodeUnpublishVolumeResponse>, Status> {
         let request = request.into_inner();
         validate_volume_id(&request.volume_id)?;
-        let target = self.path(&request.target_path)?;
-        let mut registry = self.registry.lock().await;
+        let target = self.lexical_path(&request.target_path)?;
+        let mut registry = self.registry.lock().await.clone();
         let mounts = self.host.mounts().await?;
         let mounted = unique_mount(&mounts, &target)?;
+        self.cleanup_path(&target, mounted.is_some()).await?;
         let volume = registry
             .volumes
             .get(&request.volume_id)
@@ -904,7 +1213,7 @@ impl csi::node_server::Node for NodeService {
                 Status::failed_precondition("refusing to unmount an unregistered target")
             })?;
             self.device_for_cleanup(volume).await?;
-            self.verify_mount(volume, mount, &target)?;
+            self.verify_mount(volume, mount, &target).await?;
             self.host.unmount(&target).await?;
             if self
                 .host
@@ -919,38 +1228,42 @@ impl csi::node_server::Node for NodeService {
         if let Some(volume) = volume {
             // Keep the durable publication intent until deletion succeeds so
             // a retry can finish cleanup after an unmount or process restart.
-            self.remove_publish_target(volume, &target)?;
+            self.remove_publish_target(volume, &target).await?;
             let mut next = registry.clone();
             next.volumes
                 .get_mut(&request.volume_id)
                 .expect("registered volume")
                 .published
                 .remove(&target);
-            self.update(&mut registry, next)?;
+            self.update(&mut registry, next).await?;
         }
         Ok(Response::new(csi::NodeUnpublishVolumeResponse {}))
     }
 
-    async fn node_unstage_volume(
+    async fn unstage_volume(
         &self,
         request: Request<csi::NodeUnstageVolumeRequest>,
     ) -> Result<Response<csi::NodeUnstageVolumeResponse>, Status> {
         let request = request.into_inner();
         validate_volume_id(&request.volume_id)?;
-        let target = self.path(&request.staging_target_path)?;
-        let mut registry = self.registry.lock().await;
+        let target = self.lexical_path(&request.staging_target_path)?;
+        let mut registry = self.registry.lock().await.clone();
         let mounts = self.host.mounts().await?;
         let mounted = unique_mount(&mounts, &target)?;
-        if let Some(volume) = registry.volumes.get(&request.volume_id) {
+        self.cleanup_path(&target, mounted.is_some()).await?;
+        if let Some(volume) = registry.volumes.get(&request.volume_id).cloned() {
             if volume.staging_path != target {
                 return Err(Status::invalid_argument(
                     "staging path differs from registered volume",
                 ));
             }
-            if !volume.published.is_empty() {
-                return Err(Status::failed_precondition(
-                    "volume still has published targets",
-                ));
+            for path in volume.published.keys() {
+                if mounts.iter().any(|mount| mount.target.starts_with(path)) {
+                    return Err(Status::failed_precondition(
+                        "volume still has published targets",
+                    ));
+                }
+                self.remove_publish_target(&volume, path).await?;
             }
             if mounts
                 .iter()
@@ -961,16 +1274,23 @@ impl csi::node_server::Node for NodeService {
                 ));
             }
             if let Some(mount) = mounted {
-                self.device_for_cleanup(volume).await?;
-                self.verify_mount(volume, mount, &target)?;
+                self.device_for_cleanup(&volume).await?;
+                self.verify_mount(&volume, mount, &target).await?;
                 self.host.unmount(&target).await?;
                 if unique_mount(&self.host.mounts().await?, &target)?.is_some() {
                     return Err(Status::internal("staging path remains mounted"));
                 }
             }
+            self.host.ensure_released(&volume.device).await?;
+            match self.host.discover(&volume.serial).await {
+                Ok(device) if device != volume.device => self.host.ensure_released(&device).await?,
+                Ok(_) => (),
+                Err(error) if error.code() == tonic::Code::Unavailable => (),
+                Err(error) => return Err(error),
+            }
             let mut next = registry.clone();
             next.volumes.remove(&request.volume_id);
-            self.update(&mut registry, next)?;
+            self.update(&mut registry, next).await?;
         } else if mounted.is_some() || mounts.iter().any(|m| m.target.starts_with(&target)) {
             return Err(Status::failed_precondition(
                 "refusing to unstage an unregistered mount",
@@ -979,7 +1299,7 @@ impl csi::node_server::Node for NodeService {
         Ok(Response::new(csi::NodeUnstageVolumeResponse {}))
     }
 
-    async fn node_get_info(
+    async fn get_info(
         &self,
         _request: Request<csi::NodeGetInfoRequest>,
     ) -> Result<Response<csi::NodeGetInfoResponse>, Status> {
@@ -990,7 +1310,7 @@ impl csi::node_server::Node for NodeService {
         }))
     }
 
-    async fn node_get_capabilities(
+    async fn get_capabilities(
         &self,
         _request: Request<csi::NodeGetCapabilitiesRequest>,
     ) -> Result<Response<csi::NodeGetCapabilitiesResponse>, Status> {
@@ -1012,20 +1332,29 @@ impl csi::node_server::Node for NodeService {
         }))
     }
 
-    async fn node_get_volume_stats(
+    async fn get_volume_stats(
         &self,
         request: Request<csi::NodeGetVolumeStatsRequest>,
     ) -> Result<Response<csi::NodeGetVolumeStatsResponse>, Status> {
         let request = request.into_inner();
         validate_volume_id(&request.volume_id)?;
-        let target = self.path(&request.volume_path)?;
-        let registry = self.registry.lock().await;
+        if request.volume_path.is_empty() {
+            return Err(Status::invalid_argument("volume_path is required"));
+        }
+        let registry = self.registry.lock().await.clone();
         let volume = registry
             .volumes
             .get(&request.volume_id)
             .ok_or_else(|| Status::not_found("volume is not staged"))?;
+        let target = self.path(&request.volume_path).await.map_err(|error| {
+            if error.code() == tonic::Code::InvalidArgument {
+                Status::not_found("volume is not mounted at the supplied path")
+            } else {
+                error
+            }
+        })?;
         if !request.staging_target_path.is_empty()
-            && self.path(&request.staging_target_path)? != volume.staging_path
+            && self.path(&request.staging_target_path).await? != volume.staging_path
         {
             return Err(Status::invalid_argument(
                 "staging path differs from registered volume",
@@ -1040,7 +1369,7 @@ impl csi::node_server::Node for NodeService {
                 unit: csi::volume_usage::Unit::Bytes as i32,
             }],
             Mode::Filesystem(_) => {
-                let stat = self.host.usage(&target)?;
+                let stat = self.host.usage(&target).await?;
                 vec![
                     csi::VolumeUsage {
                         available: stat.available,
@@ -1063,13 +1392,15 @@ impl csi::node_server::Node for NodeService {
         }))
     }
 
-    async fn node_expand_volume(
+    async fn expand_volume(
         &self,
         request: Request<csi::NodeExpandVolumeRequest>,
     ) -> Result<Response<csi::NodeExpandVolumeResponse>, Status> {
         let request = request.into_inner();
         validate_volume_id(&request.volume_id)?;
-        let target = self.path(&request.volume_path)?;
+        if request.volume_path.is_empty() {
+            return Err(Status::invalid_argument("volume_path is required"));
+        }
         let range = match request.capacity_range {
             Some(range) if range.required_bytes == 0 && range.limit_bytes == 0 => {
                 return Err(Status::invalid_argument(
@@ -1087,14 +1418,21 @@ impl csi::node_server::Node for NodeService {
         {
             return Err(Status::invalid_argument("invalid capacity range"));
         }
-        let registry = self.registry.lock().await;
+        let registry = self.registry.lock().await.clone();
         let volume = registry
             .volumes
             .get(&request.volume_id)
             .ok_or_else(|| Status::not_found("volume is not staged"))?;
+        let target = self.path(&request.volume_path).await.map_err(|error| {
+            if error.code() == tonic::Code::InvalidArgument {
+                Status::not_found("volume is not mounted at the supplied path")
+            } else {
+                error
+            }
+        })?;
         self.checked_volume_path(volume, &target).await?;
         if !request.staging_target_path.is_empty()
-            && self.path(&request.staging_target_path)? != volume.staging_path
+            && self.path(&request.staging_target_path).await? != volume.staging_path
         {
             return Err(Status::invalid_argument("staging path differs from volume"));
         }
@@ -1134,7 +1472,7 @@ impl csi::node_server::Node for NodeService {
             bytes = self.host.capacity(&volume.device).await?;
         }
         if bytes < range.required_bytes {
-            return Err(Status::failed_precondition(
+            return Err(Status::unavailable(
                 "block device expansion is not yet visible on this node",
             ));
         }
@@ -1149,5 +1487,87 @@ impl csi::node_server::Node for NodeService {
         Ok(Response::new(csi::NodeExpandVolumeResponse {
             capacity_bytes: bytes,
         }))
+    }
+}
+
+#[tonic::async_trait]
+impl csi::node_server::Node for NodeService {
+    async fn node_stage_volume(
+        &self,
+        request: Request<csi::NodeStageVolumeRequest>,
+    ) -> Result<Response<csi::NodeStageVolumeResponse>, Status> {
+        self.run(
+            "NodeStageVolume",
+            request.get_ref().volume_id.clone(),
+            move |service| async move { service.stage_volume(request).await },
+        )
+        .await
+    }
+    async fn node_publish_volume(
+        &self,
+        request: Request<csi::NodePublishVolumeRequest>,
+    ) -> Result<Response<csi::NodePublishVolumeResponse>, Status> {
+        self.run(
+            "NodePublishVolume",
+            request.get_ref().volume_id.clone(),
+            move |service| async move { service.publish_volume(request).await },
+        )
+        .await
+    }
+    async fn node_unpublish_volume(
+        &self,
+        request: Request<csi::NodeUnpublishVolumeRequest>,
+    ) -> Result<Response<csi::NodeUnpublishVolumeResponse>, Status> {
+        self.run(
+            "NodeUnpublishVolume",
+            request.get_ref().volume_id.clone(),
+            move |service| async move { service.unpublish_volume(request).await },
+        )
+        .await
+    }
+    async fn node_unstage_volume(
+        &self,
+        request: Request<csi::NodeUnstageVolumeRequest>,
+    ) -> Result<Response<csi::NodeUnstageVolumeResponse>, Status> {
+        self.run(
+            "NodeUnstageVolume",
+            request.get_ref().volume_id.clone(),
+            move |service| async move { service.unstage_volume(request).await },
+        )
+        .await
+    }
+    async fn node_get_info(
+        &self,
+        request: Request<csi::NodeGetInfoRequest>,
+    ) -> Result<Response<csi::NodeGetInfoResponse>, Status> {
+        self.get_info(request).await
+    }
+    async fn node_get_capabilities(
+        &self,
+        request: Request<csi::NodeGetCapabilitiesRequest>,
+    ) -> Result<Response<csi::NodeGetCapabilitiesResponse>, Status> {
+        self.get_capabilities(request).await
+    }
+    async fn node_get_volume_stats(
+        &self,
+        request: Request<csi::NodeGetVolumeStatsRequest>,
+    ) -> Result<Response<csi::NodeGetVolumeStatsResponse>, Status> {
+        self.run(
+            "NodeGetVolumeStats",
+            request.get_ref().volume_id.clone(),
+            move |service| async move { service.get_volume_stats(request).await },
+        )
+        .await
+    }
+    async fn node_expand_volume(
+        &self,
+        request: Request<csi::NodeExpandVolumeRequest>,
+    ) -> Result<Response<csi::NodeExpandVolumeResponse>, Status> {
+        self.run(
+            "NodeExpandVolume",
+            request.get_ref().volume_id.clone(),
+            move |service| async move { service.expand_volume(request).await },
+        )
+        .await
     }
 }

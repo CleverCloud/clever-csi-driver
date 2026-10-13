@@ -13,9 +13,11 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::fs::MetadataExt,
+    os::unix::fs::{MetadataExt, symlink},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command},
+    sync::{Arc, mpsc},
+    time::{Duration, Instant},
 };
 
 use clever_csi_driver::{
@@ -61,6 +63,7 @@ struct LoopDisk {
     targets: Vec<PathBuf>,
     device_number: (u64, u64),
     ownership_marker: PathBuf,
+    backing_identity: (u64, u64, u64),
 }
 
 impl LoopDisk {
@@ -69,6 +72,10 @@ impl LoopDisk {
     }
 
     fn with_readonly(backing: PathBuf, bytes: u64, readonly: bool) -> Self {
+        Self::with_marker(backing, bytes, readonly, None)
+    }
+
+    fn with_marker(backing: PathBuf, bytes: u64, readonly: bool, marker: Option<PathBuf>) -> Self {
         File::create(&backing).unwrap().set_len(bytes).unwrap();
         // Docker's private /dev does not receive host udev events. loop-control
         // can allocate an index whose block node is not yet visible here.
@@ -104,9 +111,24 @@ impl LoopDisk {
         );
         let stat = std::fs::metadata(&device).unwrap();
         // Survives SIGKILL so the outer Docker runner can detach only our loops.
-        let ownership_marker = backing.with_extension("loop-owner");
+        let ownership_marker = marker.unwrap_or_else(|| backing.with_extension("loop-owner"));
+        let backing_metadata = std::fs::metadata(&backing).unwrap();
+        let backing_identity = (
+            nix::sys::stat::major(backing_metadata.dev()),
+            nix::sys::stat::minor(backing_metadata.dev()),
+            backing_metadata.ino(),
+        );
         let mut marker = File::create(&ownership_marker).unwrap();
-        writeln!(marker, "{}\n{}", device.display(), backing.display()).unwrap();
+        writeln!(
+            marker,
+            "{}\n{}\n{}:{}\n{}",
+            device.display(),
+            backing.display(),
+            backing_identity.0,
+            backing_identity.1,
+            backing_identity.2
+        )
+        .unwrap();
         marker.sync_all().unwrap();
         Self {
             device,
@@ -117,6 +139,7 @@ impl LoopDisk {
                 nix::sys::stat::minor(stat.rdev()),
             ),
             ownership_marker,
+            backing_identity,
         }
     }
 
@@ -163,14 +186,21 @@ impl Drop for LoopDisk {
         // A name alone is not ownership: an external process could detach and
         // reuse a loop number. Check its backing file before touching it again.
         let ownership = Command::new("losetup")
-            .args(["--noheadings", "--raw", "--output", "BACK-FILE"])
+            .args([
+                "--list",
+                "--noheadings",
+                "--output",
+                "BACK-MAJ:MIN,BACK-INO",
+            ])
             .arg(&self.device)
             .output();
-        let expected =
-            std::fs::canonicalize(&self.backing).unwrap_or_else(|_| self.backing.clone());
         let owned = ownership.is_ok_and(|output| {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let fields: Vec<_> = text.split_whitespace().collect();
             output.status.success()
-                && Path::new(String::from_utf8_lossy(&output.stdout).trim()) == expected
+                && fields.len() == 2
+                && fields[0] == format!("{}:{}", self.backing_identity.0, self.backing_identity.1)
+                && fields[1] == self.backing_identity.2.to_string()
         });
         if !owned {
             eprintln!(
@@ -203,7 +233,34 @@ impl Drop for LoopDisk {
 
 fn fixture_serial(root: &Path, disk: &LoopDisk, serial: &str) {
     let entry = root.join(disk.device.file_name().unwrap());
-    std::fs::create_dir_all(entry.join("device")).unwrap();
+    // The disk is still a loop. Only topology/serial lookup is synthetic;
+    // actual mount, flush, block identity and exclusive-open checks are real.
+    let topology = root.parent().unwrap().join("synthetic-topology");
+    let transport = topology.join("virtio0");
+    let device = transport
+        .join("host0/target0:0:0")
+        .join(disk.device.file_name().unwrap());
+    for path in [
+        &entry,
+        &device,
+        &topology.join("buses/scsi"),
+        &topology.join("buses/virtio"),
+        &topology.join("drivers/virtio_scsi"),
+    ] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    symlink(&device, entry.join("device")).unwrap();
+    symlink(topology.join("buses/scsi"), device.join("subsystem")).unwrap();
+    if !transport.join("driver").exists() {
+        symlink(
+            topology.join("drivers/virtio_scsi"),
+            transport.join("driver"),
+        )
+        .unwrap();
+        symlink(topology.join("buses/virtio"), transport.join("subsystem")).unwrap();
+    }
+    std::fs::write(device.join("type"), b"0\n").unwrap();
+    std::fs::write(device.join("rescan"), b"").unwrap();
     std::fs::write(
         entry.join("dev"),
         format!("{}:{}\n", disk.device_number.0, disk.device_number.1),
@@ -635,6 +692,466 @@ async fn blank_adopted_volume_is_unchanged(root: &Path) {
     eprintln!("blank adopted volume: refused without changing any byte");
 }
 
+// A private namespace may retain a filesystem after every mount visible to the
+// driver is gone. The child touches only a mount and files created by this test.
+struct PrivateMount {
+    child: Child,
+    finish: PathBuf,
+}
+
+impl PrivateMount {
+    fn start(root: &Path, target: &Path) -> Self {
+        let ready = root.join("namespace-ready");
+        let write = root.join("namespace-write");
+        let wrote = root.join("namespace-wrote");
+        let finish = root.join("namespace-finish");
+        let child = Command::new("unshare")
+            .args(["--mount", "--propagation", "private", "sh", "-c"])
+            .arg("touch \"$1\"; while [ ! -e \"$2\" ] && [ ! -e \"$5\" ]; do sleep 0.01; done; if [ -e \"$2\" ]; then printf private-copy > \"$4/still-live\" && sync -f \"$4/still-live\" && touch \"$3\"; fi; while [ ! -e \"$5\" ]; do sleep 0.01; done")
+            .arg("owned-private-mount")
+            .args([&ready, &write, &wrote, target, &finish])
+            .spawn().unwrap();
+        Self { child, finish }
+    }
+
+    fn finish(mut self) {
+        File::create(&self.finish).unwrap();
+        assert!(self.child.wait().unwrap().success());
+    }
+}
+
+impl Drop for PrivateMount {
+    fn drop(&mut self) {
+        // Killing this test child destroys its private mount namespace.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+async fn wait_for_file(path: &Path) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !path.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+fn test_config(root: &Path, disk: &LoopDisk, serial: &str) -> NodeConfig {
+    let config = NodeConfig {
+        node_id: "vm-linux-integration-test".into(),
+        state_dir: root.join("state"),
+        device_root: "/dev".into(),
+        sys_block_dir: root.join("synthetic-sysfs-block"),
+        kubelet_root: root.join("kubelet"),
+    };
+    fixture_serial(&config.sys_block_dir, disk, serial);
+    config
+}
+
+async fn stage_ext4(service: &NodeService, serial: &str, target: &Path) {
+    service
+        .node_stage_volume(Request::new(csi::NodeStageVolumeRequest {
+            volume_id: serial.into(),
+            staging_target_path: target.to_str().unwrap().into(),
+            volume_capability: Some(capability(Some("ext4"))),
+            publish_context: context(serial, Some("ext4")),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+}
+
+fn unstage_request(serial: &str, target: &Path) -> Request<csi::NodeUnstageVolumeRequest> {
+    Request::new(csi::NodeUnstageVolumeRequest {
+        volume_id: serial.into(),
+        staging_target_path: target.to_str().unwrap().into(),
+    })
+}
+
+async fn private_copy_prevents_successful_unstage(root: &Path) {
+    let root = root.join("private-copy");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut disk = LoopDisk::new(root.join("volume.raw"), 64 * MIB);
+    run("mkfs.ext4", &["-q".as_ref(), disk.device.as_os_str()]);
+    let config = test_config(&root, &disk, "test-private-copy");
+    let serial_page = config
+        .sys_block_dir
+        .join(disk.device.file_name().unwrap())
+        .join("device/vpd_pg80");
+    let target = config.kubelet_root.join("plugins/test/globalmount");
+    disk.targets.push(target.clone());
+    let service = NodeService::new(config.clone()).unwrap();
+    stage_ext4(&service, "test-private-copy", &target).await;
+    let private = PrivateMount::start(&root, &target);
+    wait_for_file(&root.join("namespace-ready")).await;
+    let error = service
+        .node_unstage_volume(unstage_request("test-private-copy", &target))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Aborted);
+    assert!(
+        !disk.mount_belongs_to_loop(&target),
+        "driver namespace must already be unmounted"
+    );
+    File::create(root.join("namespace-write")).unwrap();
+    wait_for_file(&root.join("namespace-wrote")).await;
+    // A missing/unreadable serial is not proof of physical removal. The exact
+    // recorded block device is still present and has a live private FS holder.
+    std::fs::remove_file(serial_page).unwrap();
+    // The previous error must retain durable intent, including across restart.
+    drop(service);
+    let service = NodeService::new(config).unwrap();
+    assert_eq!(
+        service
+            .node_unstage_volume(unstage_request("test-private-copy", &target))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Aborted
+    );
+    private.finish();
+    service
+        .node_unstage_volume(unstage_request("test-private-copy", &target))
+        .await
+        .unwrap();
+    eprintln!(
+        "private mount copy: unstage remains ABORTED across restart and missing serial while copy can write and fsync; succeeds after copy exits"
+    );
+}
+
+struct FrozenFilesystem {
+    path: PathBuf,
+    stop: Option<mpsc::Sender<()>>,
+    watchdog: Option<std::thread::JoinHandle<()>>,
+    frozen: bool,
+}
+
+impl FrozenFilesystem {
+    fn freeze(path: &Path) -> Self {
+        run("fsfreeze", &["--freeze".as_ref(), path.as_os_str()]);
+        let (send, receive) = mpsc::channel();
+        let watched_path = path.to_owned();
+        let watchdog = std::thread::spawn(move || {
+            if receive.recv_timeout(Duration::from_secs(15)).is_err() {
+                let _ = Command::new("fsfreeze")
+                    .arg("--unfreeze")
+                    .arg(watched_path)
+                    .status();
+            }
+        });
+        Self {
+            path: path.into(),
+            stop: Some(send),
+            watchdog: Some(watchdog),
+            frozen: true,
+        }
+    }
+
+    fn thaw(&mut self) {
+        if self.frozen {
+            // The watchdog may already have thawed it after a stalled assertion.
+            let _ = Command::new("fsfreeze")
+                .arg("--unfreeze")
+                .arg(&self.path)
+                .status();
+            self.frozen = false;
+        }
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(watchdog) = self.watchdog.take() {
+            let _ = watchdog.join();
+        }
+    }
+}
+
+impl Drop for FrozenFilesystem {
+    fn drop(&mut self) {
+        self.thaw();
+    }
+}
+
+async fn foreign_block_bind_on_device_filesystem_is_rejected(root: &Path) {
+    let root = root.join("ext4-device-nodes");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut carrier = LoopDisk::new(root.join("carrier.raw"), 64 * MIB);
+    run("mkfs.ext4", &["-q".as_ref(), carrier.device.as_os_str()]);
+    let carrier_mount = root.join("carrier");
+    std::fs::create_dir(&carrier_mount).unwrap();
+    carrier.targets.push(carrier_mount.clone());
+    run(
+        "mount",
+        &[carrier.device.as_os_str(), carrier_mount.as_os_str()],
+    );
+    let mut disk = LoopDisk::new(root.join("block.raw"), 16 * MIB);
+    let mut config = test_config(&root, &disk, "test-ext4-device-node");
+    config.device_root = carrier_mount.join("nodes");
+    std::fs::create_dir(&config.device_root).unwrap();
+    let device_node = config.device_root.join(disk.device.file_name().unwrap());
+    nix::sys::stat::mknod(
+        &device_node,
+        nix::sys::stat::SFlag::S_IFBLK,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        nix::sys::stat::makedev(disk.device_number.0, disk.device_number.1),
+    )
+    .unwrap();
+    let foreign = root.join("foreign-bind");
+    File::create(&foreign).unwrap();
+    disk.targets.push(foreign.clone());
+    run(
+        "mount",
+        &[
+            "--bind".as_ref(),
+            device_node.as_os_str(),
+            foreign.as_os_str(),
+        ],
+    );
+    let stage = config.kubelet_root.join("plugins/test/globalmount");
+    let service = NodeService::new(config).unwrap();
+    let request = csi::NodeStageVolumeRequest {
+        volume_id: "test-ext4-device-node".into(),
+        staging_target_path: stage.to_str().unwrap().into(),
+        volume_capability: Some(capability(None)),
+        publish_context: context("test-ext4-device-node", None),
+        ..Default::default()
+    };
+    assert_eq!(
+        service
+            .node_stage_volume(Request::new(request.clone()))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::FailedPrecondition
+    );
+    assert!(
+        disk.mount_belongs_to_loop(&foreign),
+        "foreign bind must remain untouched"
+    );
+    run("umount", &[foreign.as_os_str()]);
+    service
+        .node_stage_volume(Request::new(request))
+        .await
+        .unwrap();
+    std::fs::remove_file(&device_node).unwrap();
+    assert_eq!(
+        service
+            .node_unstage_volume(unstage_request("test-ext4-device-node", &stage))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Unavailable,
+        "missing /dev inode must not imply hot-unplug while sysfs still contains the device"
+    );
+    nix::sys::stat::mknod(
+        &device_node,
+        nix::sys::stat::SFlag::S_IFBLK,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        nix::sys::stat::makedev(disk.device_number.0, disk.device_number.1),
+    )
+    .unwrap();
+    service
+        .node_unstage_volume(unstage_request("test-ext4-device-node", &stage))
+        .await
+        .unwrap();
+    eprintln!(
+        "custom ext4 device_root: foreign raw-block bind detected without scanning unrelated filesystem targets"
+    );
+    drop(disk);
+    drop(carrier);
+}
+
+async fn shutdown_xfs_can_restart_and_clean_up(root: &Path) {
+    let root = root.join("xfs-shutdown");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut disk = LoopDisk::new(root.join("volume.raw"), 384 * MIB);
+    run("mkfs.xfs", &["-f".as_ref(), disk.device.as_os_str()]);
+    let config = test_config(&root, &disk, "test-xfs-shutdown");
+    let stage = config.kubelet_root.join("plugins/test/globalmount");
+    let target = config.kubelet_root.join("pods/test/volume/mount");
+    disk.targets = vec![stage.clone(), target.clone()];
+    let service = NodeService::new(config.clone()).unwrap();
+    service
+        .node_stage_volume(Request::new(csi::NodeStageVolumeRequest {
+            volume_id: "test-xfs-shutdown".into(),
+            staging_target_path: stage.to_str().unwrap().into(),
+            volume_capability: Some(capability(Some("xfs"))),
+            publish_context: context("test-xfs-shutdown", Some("xfs")),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    service
+        .node_publish_volume(Request::new(csi::NodePublishVolumeRequest {
+            volume_id: "test-xfs-shutdown".into(),
+            staging_target_path: stage.to_str().unwrap().into(),
+            target_path: target.to_str().unwrap().into(),
+            volume_capability: Some(capability(Some("xfs"))),
+            publish_context: context("test-xfs-shutdown", Some("xfs")),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let data = target.join("before-shutdown");
+    let mut file = File::create(&data).unwrap();
+    file.write_all(b"owned XFS shutdown test").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    // XFS_IOC_GOINGDOWN targets only the fresh filesystem owned by this test.
+    run(
+        "xfs_io",
+        &[
+            "-x".as_ref(),
+            "-c".as_ref(),
+            "shutdown".as_ref(),
+            target.as_os_str(),
+        ],
+    );
+    assert_eq!(
+        std::fs::metadata(&data).unwrap_err().raw_os_error(),
+        Some(nix::libc::EIO)
+    );
+    drop(service);
+    let service = NodeService::new(config).expect("shutdown XFS must not prevent driver restart");
+    service
+        .node_unpublish_volume(Request::new(csi::NodeUnpublishVolumeRequest {
+            volume_id: "test-xfs-shutdown".into(),
+            target_path: target.to_str().unwrap().into(),
+        }))
+        .await
+        .unwrap();
+    service
+        .node_unstage_volume(unstage_request("test-xfs-shutdown", &stage))
+        .await
+        .unwrap();
+    assert!(!disk.mount_belongs_to_loop(&stage));
+    assert!(!target.exists());
+    eprintln!(
+        "XFS shutdown: real EIO from getattr, driver restart, unpublish and unstage cleanup passed"
+    );
+}
+
+fn assert_umount_inherits_process_lock(target: &Path, lock: &Path) {
+    let lock = std::fs::metadata(lock).unwrap();
+    let target = target.as_os_str().as_encoded_bytes();
+    let mut found = false;
+    for process in std::fs::read_dir("/proc").unwrap().flatten() {
+        if process
+            .file_name()
+            .to_string_lossy()
+            .parse::<u32>()
+            .is_err()
+        {
+            continue;
+        }
+        let Ok(command) = std::fs::read(process.path().join("cmdline")) else {
+            continue;
+        };
+        let fields: Vec<_> = command.split(|byte| *byte == 0).collect();
+        if fields.first() != Some(&b"umount".as_slice()) || !fields.contains(&target) {
+            continue;
+        }
+        let inherited = std::fs::read_dir(process.path().join("fd"))
+            .unwrap()
+            .flatten()
+            .any(|fd| {
+                std::fs::metadata(fd.path()).is_ok_and(|metadata| {
+                    metadata.dev() == lock.dev() && metadata.ino() == lock.ino()
+                })
+            });
+        assert!(
+            inherited,
+            "pending real umount must retain the driver's process lock fd"
+        );
+        found = true;
+    }
+    assert!(found, "expected this test's pending umount subprocess");
+}
+
+async fn cancelled_unstage_waits_for_kernel_completion(root: &Path) {
+    let root = root.join("cancelled-unmount");
+    std::fs::create_dir_all(&root).unwrap();
+    // Only this test-owned outer filesystem is frozen; the driver registry and
+    // ownership markers remain on the ordinary scratch filesystem.
+    let mut outer = LoopDisk::new(root.join("backing.raw"), 192 * MIB);
+    run("mkfs.ext4", &["-q".as_ref(), outer.device.as_os_str()]);
+    let backing_mount = root.join("backing");
+    std::fs::create_dir(&backing_mount).unwrap();
+    outer.targets.push(backing_mount.clone());
+    run(
+        "mount",
+        &[outer.device.as_os_str(), backing_mount.as_os_str()],
+    );
+    let mut disk = LoopDisk::with_marker(
+        backing_mount.join("volume.raw"),
+        64 * MIB,
+        false,
+        Some(root.join("inner.loop-owner")),
+    );
+    run("mkfs.ext4", &["-q".as_ref(), disk.device.as_os_str()]);
+    let config = test_config(&root, &disk, "test-delayed-unmount");
+    let target = config.kubelet_root.join("plugins/test/globalmount");
+    disk.targets.push(target.clone());
+    let process_lock = config.state_dir.join("node.lock");
+    let service = Arc::new(NodeService::new(config).unwrap());
+    stage_ext4(&service, "test-delayed-unmount", &target).await;
+    File::create(target.join("dirty"))
+        .unwrap()
+        .write_all(&vec![b'x'; 2 * MIB as usize])
+        .unwrap();
+    let mut frozen = FrozenFilesystem::freeze(&backing_mount);
+    let request = unstage_request("test-delayed-unmount", &target);
+    let worker_service = service.clone();
+    let waiter = tokio::spawn(async move { worker_service.node_unstage_volume(request).await });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while disk.mount_belongs_to_loop(&target) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        !waiter.is_finished(),
+        "umount must still wait for the frozen backing filesystem"
+    );
+    assert_umount_inherits_process_lock(&target, &process_lock);
+    waiter.abort();
+    let _ = waiter.await;
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        service.node_unstage_volume(unstage_request("test-delayed-unmount", &target)),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(
+        error.code(),
+        tonic::Code::Aborted,
+        "RPC cancellation must not release the in-flight volume guard"
+    );
+    frozen.thaw();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match service
+            .node_unstage_volume(unstage_request("test-delayed-unmount", &target))
+            .await
+        {
+            Ok(_) => break,
+            Err(error) if error.code() == tonic::Code::Aborted && Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(10)).await
+            }
+            Err(error) => panic!("retry after kernel completion: {error}"),
+        }
+    }
+    eprintln!(
+        "cancelled unstage: mountinfo absent while kernel flush blocks; concurrent retry ABORTED until actual completion"
+    );
+    // Drop inner loop before unmounting the outer filesystem that backs it.
+    drop(disk);
+    drop(outer);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires explicitly opted-in disposable privileged Linux container and storage utilities"]
 async fn real_linux_filesystem_and_block_lifecycle() {
@@ -664,5 +1181,25 @@ async fn real_linux_filesystem_and_block_lifecycle() {
     lifecycle(&directory, None).await;
     protected_readonly_block(&directory).await;
     blank_adopted_volume_is_unchanged(&directory).await;
+    private_copy_prevents_successful_unstage(&directory).await;
+    cancelled_unstage_waits_for_kernel_completion(&directory).await;
+    shutdown_xfs_can_restart_and_clean_up(&directory).await;
+    foreign_block_bind_on_device_filesystem_is_rejected(&directory).await;
+    let mut pending = vec![directory.clone()];
+    while let Some(path) = pending.pop() {
+        for entry in std::fs::read_dir(path).unwrap().flatten() {
+            let kind = entry.file_type().unwrap();
+            assert!(
+                entry
+                    .path()
+                    .extension()
+                    .is_none_or(|extension| extension != "loop-owner"),
+                "loop cleanup incomplete: preserve ownership markers for outer recovery"
+            );
+            if kind.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
     std::fs::remove_dir_all(directory).unwrap();
 }

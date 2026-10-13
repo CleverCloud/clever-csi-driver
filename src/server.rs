@@ -17,12 +17,17 @@ pub struct SocketGuard {
     _lock: Flock<File>,
 }
 
+impl SocketGuard {
+    pub fn is_current(&self) -> bool {
+        std::fs::symlink_metadata(&self.path)
+            .is_ok_and(|metadata| metadata.file_type().is_socket() && metadata.ino() == self.inode)
+    }
+}
+
 impl Drop for SocketGuard {
     fn drop(&mut self) {
         // Never remove another process's replacement socket.
-        if std::fs::symlink_metadata(&self.path)
-            .is_ok_and(|m| m.file_type().is_socket() && m.ino() == self.inode)
-        {
+        if self.is_current() {
             let _ = std::fs::remove_file(&self.path);
         }
     }
@@ -129,6 +134,19 @@ mod tests {
         drop(listener);
         drop(guard);
         assert!(!path.exists());
+    }
+    #[tokio::test]
+    async fn detects_removed_or_replaced_socket_without_removing_the_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("csi.sock");
+        let (_listener, guard) = bind_socket(&path).unwrap();
+        assert!(guard.is_current());
+        std::fs::remove_file(&path).unwrap();
+        assert!(!guard.is_current());
+        let _replacement = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        assert!(!guard.is_current());
+        drop(guard);
+        assert!(path.exists());
     }
     #[tokio::test]
     async fn never_deletes_regular_files_or_symlinks() {

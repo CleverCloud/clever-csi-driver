@@ -131,7 +131,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let path = endpoint_path(&args.endpoint)?;
-    let (listener, _socket_guard) = bind_socket(&path)?;
+    let (listener, socket_guard) = bind_socket(&path)?;
+    let socket_guard = Arc::new(socket_guard);
     let http_listener = tokio::net::TcpListener::bind(args.health_address).await?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let stopping_readiness = readiness.clone();
@@ -159,15 +160,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     });
     let router = axum::Router::new()
-        .route("/healthz", axum::routing::get(|| async { "ok\n" }))
+        .route(
+            "/healthz",
+            axum::routing::get({
+                let socket = socket_guard.clone();
+                move || {
+                    let socket = socket.clone();
+                    async move {
+                        if socket.is_current() {
+                            (axum::http::StatusCode::OK, "ok\n")
+                        } else {
+                            (
+                                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                                "CSI socket unavailable\n",
+                            )
+                        }
+                    }
+                }
+            }),
+        )
         .route(
             "/readyz",
             axum::routing::get({
                 let ready = readiness.clone();
+                let socket = socket_guard.clone();
                 move || {
                     let ready = ready.clone();
+                    let socket = socket.clone();
                     async move {
-                        if ready.load(Ordering::Acquire) {
+                        if ready.load(Ordering::Acquire) && socket.is_current() {
                             (axum::http::StatusCode::OK, "ready\n")
                         } else {
                             (
@@ -182,6 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut grpc_stop = shutdown_rx.clone();
     let mut http_stop = shutdown_rx;
     tracing::info!(role = ?args.mode, driver = %args.driver_name, endpoint = %path.display(), "CSI service starting");
+    let draining_node = node.clone();
     let grpc = Server::builder()
         .add_service(IdentityServer::new(identity))
         .add_optional_service(controller.map(ControllerServer::new))
@@ -199,6 +221,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         async { http.await.map_err(Box::<dyn std::error::Error>::from) },
     );
     readiness.store(false, Ordering::Release);
+    if let Some(node) = draining_node {
+        node.drain().await;
+    }
     if let Some(checker) = checker {
         checker.abort();
     }

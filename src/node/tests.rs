@@ -16,6 +16,20 @@ struct Machine {
     block_mounts: BTreeMap<PathBuf, (u64, u64)>,
     readonly: bool,
     devices: BTreeMap<String, Device>,
+    fail_mount: bool,
+    fail_bind: bool,
+    omitted_flags: BTreeSet<String>,
+    release_busy: bool,
+    inaccessible_paths: BTreeSet<PathBuf>,
+    paused_mounts: BTreeMap<PathBuf, Arc<Pause>>,
+    device_filesystem: Option<(u64, u64)>,
+    mount_barrier: Option<(Arc<tokio::sync::Barrier>, usize)>,
+}
+
+#[derive(Default)]
+struct Pause {
+    entered: Notify,
+    resume: Notify,
 }
 
 struct FakeHost {
@@ -46,7 +60,25 @@ impl Host for FakeHost {
         Ok(self.fs_type.clone())
     }
     async fn mounts(&self) -> Result<Vec<Mount>, Status> {
-        Ok(self.machine.lock().unwrap().mounts.clone())
+        let (mounts, barrier) = {
+            let mut machine = self.machine.lock().unwrap();
+            let barrier = machine.mount_barrier.as_mut().map(|(barrier, remaining)| {
+                *remaining -= 1;
+                barrier.clone()
+            });
+            if machine
+                .mount_barrier
+                .as_ref()
+                .is_some_and(|(_, remaining)| *remaining == 0)
+            {
+                machine.mount_barrier = None;
+            }
+            (machine.mounts.clone(), barrier)
+        };
+        if let Some(barrier) = barrier {
+            barrier.wait().await;
+        }
+        Ok(mounts)
     }
     async fn mount_fs(
         &self,
@@ -55,21 +87,37 @@ impl Host for FakeHost {
         fs_type: &str,
         flags: &[String],
     ) -> Result<(), Status> {
+        let pause = self.machine.lock().unwrap().paused_mounts.remove(target);
+        if let Some(pause) = pause {
+            pause.entered.notify_one();
+            pause.resume.notified().await;
+        }
         let mut machine = self.machine.lock().unwrap();
         machine.commands.push("mount_fs".into());
+        if machine.fail_mount {
+            return Err(Status::internal("mount rejected before effect"));
+        }
+        let options = flags
+            .iter()
+            .filter(|flag| !machine.omitted_flags.contains(*flag))
+            .cloned()
+            .collect();
         machine.mounts.push(Mount {
             target: target.into(),
             root: "/".into(),
             major: device.major,
             minor: device.minor,
             fs_type: fs_type.into(),
-            options: flags.iter().cloned().collect(),
+            options,
         });
         Ok(())
     }
     async fn bind(&self, source: &Path, target: &Path, flags: &[String]) -> Result<(), Status> {
         {
             let mut machine = self.machine.lock().unwrap();
+            if machine.fail_bind {
+                return Err(Status::internal("bind rejected before effect"));
+            }
             let device = machine
                 .devices
                 .values()
@@ -115,12 +163,17 @@ impl Host for FakeHost {
     async fn remount_bind(&self, target: &Path, flags: &[String]) -> Result<(), Status> {
         let mut machine = self.machine.lock().unwrap();
         machine.commands.push("remount_bind".into());
+        let options = flags
+            .iter()
+            .filter(|flag| !machine.omitted_flags.contains(*flag))
+            .cloned()
+            .collect();
         machine
             .mounts
             .iter_mut()
             .find(|mount| mount.target == target)
             .unwrap()
-            .options = flags.iter().cloned().collect();
+            .options = options;
         Ok(())
     }
     async fn unmount(&self, target: &Path) -> Result<(), Status> {
@@ -152,10 +205,29 @@ impl Host for FakeHost {
         }
         Ok(())
     }
-    fn block_identity(&self, path: &Path) -> Result<Option<(u64, u64)>, Status> {
-        Ok(self.machine.lock().unwrap().block_mounts.get(path).copied())
+    async fn ensure_released(&self, device: &Device) -> Result<(), Status> {
+        let machine = self.machine.lock().unwrap();
+        if machine.release_busy
+            || machine
+                .mounts
+                .iter()
+                .any(|mount| (mount.major, mount.minor) == (device.major, device.minor))
+        {
+            return Err(Status::aborted("device is still held by a filesystem"));
+        }
+        Ok(())
     }
-    fn usage(&self, _: &Path) -> Result<host::Usage, Status> {
+    async fn device_filesystem(&self, _: &Device) -> Result<Option<(u64, u64)>, Status> {
+        Ok(self.machine.lock().unwrap().device_filesystem)
+    }
+    async fn block_identity(&self, path: &Path) -> Result<Option<(u64, u64)>, Status> {
+        let machine = self.machine.lock().unwrap();
+        if machine.inaccessible_paths.contains(path) {
+            return Err(Status::internal("unrelated filesystem unavailable"));
+        }
+        Ok(machine.block_mounts.get(path).copied())
+    }
+    async fn usage(&self, _: &Path) -> Result<host::Usage, Status> {
         Ok(host::Usage {
             total: 1024,
             available: 512,
@@ -174,7 +246,10 @@ struct Fixture {
 impl Fixture {
     fn new(fs_type: Option<&str>) -> Self {
         // Do not allocate test artifacts in /tmp (tmpfs in the development VM).
-        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/node-tests");
+        let base = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("node-tests");
         std::fs::create_dir_all(&base).unwrap();
         let directory = tempfile::Builder::new()
             .prefix("node-")
@@ -597,17 +672,18 @@ fn process_lock_and_vm_incarnation_prevent_state_reuse() {
     ));
 }
 
-#[test]
-fn paths_reject_escape_and_symlinks_and_flags_reject_mount_redirection() {
+#[tokio::test]
+async fn paths_reject_escape_and_symlinks_and_flags_reject_mount_redirection() {
     let fixture = Fixture::new(Some("xfs"));
     let service = fixture.service();
-    assert!(service.path("/etc/passwd").is_err());
+    assert!(service.path("/etc/passwd").await.is_err());
     assert!(
         service
             .path(&format!(
                 "{}/../escape",
                 fixture.config.kubelet_root.display()
             ))
+            .await
             .is_err()
     );
     std::os::unix::fs::symlink(
@@ -621,6 +697,7 @@ fn paths_reject_escape_and_symlinks_and_flags_reject_mount_redirection() {
                 "{}/link/target",
                 fixture.config.kubelet_root.display()
             ))
+            .await
             .is_err()
     );
     for flag in [
@@ -685,7 +762,7 @@ async fn expansion_does_not_claim_success_when_capacity_is_still_old() {
         }))
         .await
         .unwrap_err();
-    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(error.code(), tonic::Code::Unavailable);
     assert!(
         !fixture
             .host
@@ -1438,5 +1515,592 @@ async fn unpublish_refuses_a_nested_foreign_mount_even_without_the_parent_mount(
         service.registry.lock().await.volumes["volume-1"]
             .published
             .contains_key(Path::new(&fixture.target_path()))
+    );
+}
+
+#[tokio::test]
+async fn cancelled_stage_keeps_its_lock_while_other_volumes_make_progress() {
+    let fixture = Fixture::new(Some("xfs"));
+    let service = fixture.service();
+    let pause = Arc::new(Pause::default());
+    fixture
+        .host
+        .machine
+        .lock()
+        .unwrap()
+        .paused_mounts
+        .insert(fixture.stage_path().into(), pause.clone());
+    let running = tokio::spawn({
+        let service = service.clone();
+        let request = fixture.stage(false);
+        async move { service.node_stage_volume(Request::new(request)).await }
+    });
+    pause.entered.notified().await;
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        service
+            .node_stage_volume(Request::new(fixture.stage(false)))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Aborted
+    );
+    let mut second = fixture.stage(false);
+    second.volume_id = "volume-2".into();
+    second.staging_target_path = fixture
+        .config
+        .kubelet_root
+        .join("plugins/second/globalmount")
+        .to_string_lossy()
+        .into();
+    second
+        .publish_context
+        .insert("device_serial".into(), "second-serial".into());
+    fixture.host.machine.lock().unwrap().devices.insert(
+        "second-serial".into(),
+        Device {
+            path: fixture.config.device_root.join("vdc"),
+            major: 8,
+            minor: 32,
+        },
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        service.node_stage_volume(Request::new(second)),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    pause.resume.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(2), service.drain())
+        .await
+        .unwrap();
+    service
+        .node_stage_volume(Request::new(fixture.stage(false)))
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .host
+            .machine
+            .lock()
+            .unwrap()
+            .commands
+            .iter()
+            .filter(|command| *command == "mount_fs")
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn final_stage_and_publish_errors_remove_intent_without_waiting_for_inverse_rpcs() {
+    let fixture = Fixture::new(Some("xfs"));
+    let service = fixture.service();
+    fixture.host.machine.lock().unwrap().fail_mount = true;
+    assert_eq!(
+        service
+            .node_stage_volume(Request::new(fixture.stage(false)))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Internal
+    );
+    assert!(service.registry.lock().await.volumes.is_empty());
+    fixture.host.machine.lock().unwrap().fail_mount = false;
+    service
+        .node_stage_volume(Request::new(fixture.stage(false)))
+        .await
+        .unwrap();
+    fixture.host.machine.lock().unwrap().fail_bind = true;
+    assert_eq!(
+        service
+            .node_publish_volume(Request::new(fixture.publish(false, false)))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Internal
+    );
+    assert!(
+        service.registry.lock().await.volumes["volume-1"]
+            .published
+            .is_empty()
+    );
+    service
+        .node_unstage_volume(Request::new(csi::NodeUnstageVolumeRequest {
+            volume_id: "volume-1".into(),
+            staging_target_path: fixture.stage_path(),
+        }))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn missing_mount_flags_keep_uncertain_effects_retryable() {
+    for flag in ["nosuid", "nodev", "noexec", "ro"] {
+        let fixture = Fixture::new(Some("xfs"));
+        let service = fixture.service();
+        let mut stage = fixture.stage(false);
+        if let Some(csi::volume_capability::AccessType::Mount(mount)) = stage
+            .volume_capability
+            .as_mut()
+            .unwrap()
+            .access_type
+            .as_mut()
+        {
+            mount.mount_flags = vec!["noexec".into(), "ro".into()];
+        }
+        fixture
+            .host
+            .machine
+            .lock()
+            .unwrap()
+            .omitted_flags
+            .insert(flag.into());
+        assert_eq!(
+            service
+                .node_stage_volume(Request::new(stage))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Aborted
+        );
+        assert!(
+            service
+                .registry
+                .lock()
+                .await
+                .volumes
+                .contains_key("volume-1")
+        );
+        service
+            .node_unstage_volume(Request::new(csi::NodeUnstageVolumeRequest {
+                volume_id: "volume-1".into(),
+                staging_target_path: fixture.stage_path(),
+            }))
+            .await
+            .unwrap();
+        assert!(service.registry.lock().await.volumes.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn foreign_unavailable_filesystems_do_not_receive_stat_calls() {
+    let fixture = Fixture::new(Some("xfs"));
+    let service = fixture.service();
+    for fs_type in ["nfs", "nfs4", "fuse.sshfs"] {
+        let target = fixture.config.kubelet_root.join(fs_type);
+        let mut machine = fixture.host.machine.lock().unwrap();
+        machine.inaccessible_paths.insert(target.clone());
+        machine.mounts.push(Mount {
+            target,
+            root: "/".into(),
+            major: 0,
+            minor: 90,
+            fs_type: fs_type.into(),
+            options: BTreeSet::new(),
+        });
+    }
+    service
+        .node_stage_volume(Request::new(fixture.stage(false)))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn mount_options_can_change_only_after_old_mounts_are_gone() {
+    let fixture = Fixture::new(Some("xfs"));
+    let service = fixture.service();
+    service
+        .node_stage_volume(Request::new(fixture.stage(false)))
+        .await
+        .unwrap();
+    let mut changed = fixture.stage(false);
+    if let Some(csi::volume_capability::AccessType::Mount(mount)) = changed
+        .volume_capability
+        .as_mut()
+        .unwrap()
+        .access_type
+        .as_mut()
+    {
+        mount.mount_flags.push("noexec".into());
+    }
+    assert!(
+        service
+            .node_stage_volume(Request::new(changed.clone()))
+            .await
+            .is_err()
+    );
+    fixture.host.machine.lock().unwrap().mounts.clear();
+    drop(service);
+    let service = fixture.service();
+    service
+        .node_stage_volume(Request::new(changed))
+        .await
+        .unwrap();
+    assert!(
+        service.registry.lock().await.volumes["volume-1"]
+            .spec
+            .flags
+            .contains(&"noexec".into())
+    );
+}
+
+#[tokio::test]
+async fn disappeared_serial_does_not_reserve_a_reused_device_number() {
+    let fixture = Fixture::new(Some("xfs"));
+    let service = fixture.service();
+    service
+        .node_stage_volume(Request::new(fixture.stage(false)))
+        .await
+        .unwrap();
+    {
+        let mut machine = fixture.host.machine.lock().unwrap();
+        machine.mounts.clear();
+        machine.device_missing = true;
+        machine
+            .devices
+            .insert("new-serial".into(), fixture.host.device.clone());
+    }
+    let mut stage = fixture.stage(false);
+    stage.volume_id = "new-volume".into();
+    stage.staging_target_path = fixture
+        .config
+        .kubelet_root
+        .join("plugins/new/globalmount")
+        .to_string_lossy()
+        .into();
+    stage
+        .publish_context
+        .insert("device_serial".into(), "new-serial".into());
+    service
+        .node_stage_volume(Request::new(stage))
+        .await
+        .unwrap();
+    assert!(
+        !service
+            .registry
+            .lock()
+            .await
+            .volumes
+            .contains_key("volume-1")
+    );
+}
+
+#[tokio::test]
+async fn unstage_keeps_state_until_the_device_is_released() {
+    let fixture = Fixture::new(Some("xfs"));
+    let service = fixture.service();
+    service
+        .node_stage_volume(Request::new(fixture.stage(false)))
+        .await
+        .unwrap();
+    fixture.host.machine.lock().unwrap().release_busy = true;
+    let request = csi::NodeUnstageVolumeRequest {
+        volume_id: "volume-1".into(),
+        staging_target_path: fixture.stage_path(),
+    };
+    assert_eq!(
+        service
+            .node_unstage_volume(Request::new(request.clone()))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Aborted
+    );
+    assert!(fixture.host.machine.lock().unwrap().mounts.is_empty());
+    drop(service);
+    let service = fixture.service();
+    assert!(
+        service
+            .registry
+            .lock()
+            .await
+            .volumes
+            .contains_key("volume-1")
+    );
+    assert_eq!(
+        service
+            .node_unstage_volume(Request::new(request.clone()))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Aborted
+    );
+    fixture.host.machine.lock().unwrap().release_busy = false;
+    service
+        .node_unstage_volume(Request::new(request))
+        .await
+        .unwrap();
+    assert!(service.registry.lock().await.volumes.is_empty());
+}
+
+#[tokio::test]
+async fn block_stats_accept_only_the_owned_kubelet_mapping() {
+    let fixture = Fixture::new(None);
+    let service = fixture.service();
+    service
+        .node_stage_volume(Request::new(fixture.stage(true)))
+        .await
+        .unwrap();
+    let base = fixture
+        .config
+        .kubelet_root
+        .join("plugins/kubernetes.io/csi/volumeDevices");
+    let mut publish = fixture.publish(true, false);
+    publish.target_path = base.join("publish/pv/pod-id").to_string_lossy().into();
+    service
+        .node_publish_volume(Request::new(publish.clone()))
+        .await
+        .unwrap();
+    let alias = base.join("pv/dev/pod-id");
+    fixture
+        .host
+        .bind(Path::new(&publish.target_path), &alias, &[])
+        .await
+        .unwrap();
+    fixture
+        .host
+        .machine
+        .lock()
+        .unwrap()
+        .block_mounts
+        .insert(alias.clone(), (8, 16));
+    let request = csi::NodeGetVolumeStatsRequest {
+        volume_id: "volume-1".into(),
+        volume_path: alias.to_string_lossy().into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        service
+            .node_get_volume_stats(Request::new(request.clone()))
+            .await
+            .unwrap()
+            .into_inner()
+            .usage[0]
+            .total,
+        1024 * 1024 * 1024
+    );
+    fixture
+        .host
+        .machine
+        .lock()
+        .unwrap()
+        .block_mounts
+        .insert(alias, (8, 48));
+    assert_eq!(
+        service
+            .node_get_volume_stats(Request::new(request))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::FailedPrecondition
+    );
+}
+
+#[tokio::test]
+async fn raw_bind_on_the_device_inode_filesystem_prevents_adoption() {
+    let fixture = Fixture::new(None);
+    let service = fixture.service();
+    let target = fixture.config.kubelet_root.join("foreign-raw");
+    {
+        let mut machine = fixture.host.machine.lock().unwrap();
+        machine.device_filesystem = Some((8, 1));
+        machine.block_mounts.insert(target.clone(), (8, 16));
+        machine.mounts.push(Mount {
+            target,
+            root: "/devices/volume".into(),
+            major: 8,
+            minor: 1,
+            fs_type: "ext4".into(),
+            options: BTreeSet::from(["rw".into()]),
+        });
+    }
+    assert_eq!(
+        service
+            .node_stage_volume(Request::new(fixture.stage(true)))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::FailedPrecondition
+    );
+    assert!(service.registry.lock().await.volumes.is_empty());
+}
+
+#[tokio::test]
+async fn concurrent_publications_reserve_overlapping_paths_before_creating_them() {
+    for _ in 0..4 {
+        let fixture = Fixture::new(Some("xfs"));
+        let service = fixture.service();
+        service
+            .node_stage_volume(Request::new(fixture.stage(false)))
+            .await
+            .unwrap();
+        let mut second_stage = fixture.stage(false);
+        second_stage.volume_id = "volume-2".into();
+        second_stage.staging_target_path = fixture
+            .config
+            .kubelet_root
+            .join("plugins/second/globalmount")
+            .to_string_lossy()
+            .into();
+        second_stage
+            .publish_context
+            .insert("device_serial".into(), "second-serial".into());
+        fixture.host.machine.lock().unwrap().devices.insert(
+            "second-serial".into(),
+            Device {
+                path: fixture.config.device_root.join("vdc"),
+                major: 8,
+                minor: 32,
+            },
+        );
+        service
+            .node_stage_volume(Request::new(second_stage.clone()))
+            .await
+            .unwrap();
+        let parent = fixture.publish(false, false);
+        let child_path = Path::new(&parent.target_path).join("child");
+        let mut child = parent.clone();
+        child.volume_id = second_stage.volume_id;
+        child.staging_target_path = second_stage.staging_target_path;
+        child.publish_context = second_stage.publish_context;
+        child.target_path = child_path.to_string_lossy().into();
+        fixture.host.machine.lock().unwrap().mount_barrier =
+            Some((Arc::new(tokio::sync::Barrier::new(2)), 4));
+        let (parent_result, child_result) =
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                tokio::join!(
+                    service.node_publish_volume(Request::new(parent)),
+                    service.node_publish_volume(Request::new(child))
+                )
+            })
+            .await
+            .unwrap();
+        assert_ne!(parent_result.is_ok(), child_result.is_ok());
+        assert_eq!(
+            child_path.exists(),
+            child_result.is_ok(),
+            "a refused child publication must not modify the parent volume"
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_target_preparation_preserves_foreign_content_and_removes_intent() {
+    for block in [false, true] {
+        let fixture = Fixture::new(Some("xfs"));
+        let service = fixture.service();
+        service
+            .node_stage_volume(Request::new(fixture.stage(block)))
+            .await
+            .unwrap();
+        let target = PathBuf::from(fixture.target_path());
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "unrelated data").unwrap();
+        assert!(
+            service
+                .node_publish_volume(Request::new(fixture.publish(block, false)))
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "unrelated data");
+        assert!(
+            service.registry.lock().await.volumes["volume-1"]
+                .published
+                .is_empty()
+        );
+        service
+            .node_unstage_volume(Request::new(csi::NodeUnstageVolumeRequest {
+                volume_id: "volume-1".into(),
+                staging_target_path: fixture.stage_path(),
+            }))
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn missing_serial_does_not_bypass_release_of_the_recorded_device() {
+    let fixture = Fixture::new(Some("xfs"));
+    let service = fixture.service();
+    service
+        .node_stage_volume(Request::new(fixture.stage(false)))
+        .await
+        .unwrap();
+    {
+        let mut machine = fixture.host.machine.lock().unwrap();
+        machine.device_missing = true;
+        machine.release_busy = true;
+    }
+    let request = csi::NodeUnstageVolumeRequest {
+        volume_id: "volume-1".into(),
+        staging_target_path: fixture.stage_path(),
+    };
+    assert_eq!(
+        service
+            .node_unstage_volume(Request::new(request.clone()))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Aborted
+    );
+    assert!(
+        service
+            .registry
+            .lock()
+            .await
+            .volumes
+            .contains_key("volume-1")
+    );
+    fixture.host.machine.lock().unwrap().release_busy = false;
+    service
+        .node_unstage_volume(Request::new(request))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn reattached_serial_does_not_prevent_removing_its_old_owned_mounts() {
+    let fixture = Fixture::new(Some("xfs"));
+    let service = fixture.service();
+    service
+        .node_stage_volume(Request::new(fixture.stage(false)))
+        .await
+        .unwrap();
+    service
+        .node_publish_volume(Request::new(fixture.publish(false, false)))
+        .await
+        .unwrap();
+    fixture.host.machine.lock().unwrap().replacement = Some(Device {
+        path: fixture.config.device_root.join("vdc"),
+        major: 8,
+        minor: 32,
+    });
+    service
+        .node_unpublish_volume(Request::new(csi::NodeUnpublishVolumeRequest {
+            volume_id: "volume-1".into(),
+            target_path: fixture.target_path(),
+        }))
+        .await
+        .unwrap();
+    service
+        .node_unstage_volume(Request::new(csi::NodeUnstageVolumeRequest {
+            volume_id: "volume-1".into(),
+            staging_target_path: fixture.stage_path(),
+        }))
+        .await
+        .unwrap();
+    assert!(service.registry.lock().await.volumes.is_empty());
+    service
+        .node_stage_volume(Request::new(fixture.stage(false)))
+        .await
+        .unwrap();
+    assert_eq!(
+        service.registry.lock().await.volumes["volume-1"]
+            .device
+            .minor,
+        32
     );
 }
