@@ -207,9 +207,32 @@ attached and the requested read-only policy is effective:
 The node receives `device_serial`, `readonly` (`"true"` or `"false"`),
 `volume_mode`, `fs_type` for filesystems, and `format_policy`. It searches the
 actual device identity; no caller-provided `/dev/...` path is accepted. The
-controller rejects mismatched volume/VM identity, filesystem/mode/read-only policy or malformed
-serials. Read-only requests must also be enforced by QEMU/Axo, not merely by a
-guest bind mount. `SINGLE_NODE_READER_ONLY` requires `readonly: true`.
+controller rejects mismatched volume/VM identity, filesystem/mode/read-only
+policy or malformed serials.
+
+This transport uses **QEMU `scsi-hd` over virtio-scsi**. `device_serial` is 1–36
+ASCII characters, matching `[A-Za-z0-9._-]{1,36}`. Axo must allocate a stable
+serial for the volume, ensure uniqueness among disks attached to the VM, and
+verify the serial exposed in the guest. Axo and the controller require the exact
+ASCII identifier: they never truncate, pad, change its case or derive it by
+shortening the opaque volume handle. The Node plugin may remove fixed-width
+transport padding and surrounding whitespace from guest attributes before
+comparison; it preserves the identifier's case and content, and rejects
+conflicting serial attributes or duplicate matching devices. Invalid or
+overlong Axo responses fail with `DATA_LOSS`. This contract does not support
+virtio-blk, whose 20-byte serial limit requires a separate transport contract.
+Volume handles keep their existing opaque format and are not subject to the
+serial character or length restrictions.
+
+Read-only requests must be enforced by QEMU/Axo. `SINGLE_NODE_READER_ONLY`
+requires `readonly: true`. For filesystems, the effective guest mount remains
+read-only when any of the attachment, stage options, access mode or publication
+requires it; a publication with `readonly: false` cannot relax an existing
+read-only stage. For raw Block, a read-only bind mount does not prevent writes
+through the device special file. A read-only publication therefore requires
+both `readonly: true` from Axo and `blockdev --getro` reporting `1` in the guest.
+The Node plugin rejects a read-only raw Block publication on a writable
+attachment and never changes the shared device's global read-only flag.
 
 The minimum safe attachment transaction requires:
 

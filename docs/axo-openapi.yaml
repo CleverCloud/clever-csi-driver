@@ -352,8 +352,23 @@ components:
                 transport: {const: qemu}
                 volume_id: {$ref: '#/components/schemas/Handle'}
                 node_id: {$ref: '#/components/schemas/NodeId'}
-                device_serial: {type: string, minLength: 1, maxLength: 256, pattern: '^\S+$'}
-                readonly: {type: boolean}
+                device_serial:
+                  type: string
+                  minLength: 1
+                  maxLength: 36
+                  pattern: '^[A-Za-z0-9._-]{1,36}(?![\s\S])'
+                  description: >-
+                    Exact ASCII serial of the QEMU scsi-hd device exposed over
+                    virtio-scsi, stable for this volume and unique among disks
+                    attached to the VM. Never truncate, pad or normalize it.
+                    virtio-blk is not supported by this transport contract.
+                readonly:
+                  type: boolean
+                  description: >-
+                    Read-only policy already enforced by Axo/QEMU. For raw
+                    Block read-only publication, the guest must also report
+                    blockdev --getro as 1; a read-only device bind mount alone
+                    does not prevent writes to a special file.
                 format_policy: {const: preformatted}
     SnapshotRecord:
       type: object

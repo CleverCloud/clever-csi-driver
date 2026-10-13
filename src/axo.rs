@@ -129,6 +129,7 @@ pub enum AttachmentRecord {
     Qemu {
         volume_id: String,
         node_id: String,
+        /// Exact scsi-hd/virtio-scsi serial, ASCII [A-Za-z0-9._-]{1,36}.
         device_serial: String,
         readonly: bool,
         #[serde(flatten)]

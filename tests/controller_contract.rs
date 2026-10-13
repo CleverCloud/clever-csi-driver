@@ -1,6 +1,7 @@
 //! Contract tests against a local HTTP Axo double; no Ceph, VM or cluster mutation.
 use std::{
     collections::{HashMap, VecDeque},
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -60,7 +61,9 @@ impl Fixture {
         let task = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
         });
-        let temp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let temp_root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        std::fs::create_dir_all(&temp_root).unwrap();
+        let temp = tempfile::tempdir_in(temp_root).unwrap();
         let token_file = temp.path().join("token");
         std::fs::write(&token_file, "biscuit-first\n").unwrap();
         let controller = CsiController::new(ControllerConfig {
@@ -296,6 +299,57 @@ async fn attach_requires_completed_preformatted_identity_and_preserves_opaque_ha
     assert_eq!(call.body["node_id"], "vm-incarnation-0123");
     assert!(!call.path.contains("opaque"));
     assert_eq!(call.body["volume_context"]["clusterID"], "legacy-ceph-id");
+}
+
+#[tokio::test]
+async fn attachment_serials_preserve_exact_ascii_identity_at_transport_limit() {
+    let fixture = Fixture::new().await;
+    let serials = [
+        "A",
+        "disk_0.x-1",
+        "12345678-1234-1234-1234-1234567890AB",
+        "12345678-1234-1234-1234-1234567890Ab",
+    ];
+    for serial in serials {
+        fixture.reply(StatusCode::OK, json!({"transport":"qemu", "volume_id":"0001-not-decoded/../../opaque", "node_id":"vm-incarnation-0123", "readonly":false, "device_serial":serial, "volume_mode":"filesystem", "fs_type":"xfs", "format_policy":"preformatted"}));
+        let response = fixture
+            .controller
+            .controller_publish_volume(Request::new(publish()))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.publish_context["device_serial"], serial);
+    }
+    assert_eq!(fixture.calls().len(), serials.len());
+    for call in fixture.calls() {
+        assert_eq!(call.body["volume_id"], "0001-not-decoded/../../opaque");
+    }
+}
+
+#[tokio::test]
+async fn attachment_rejects_invalid_serials_without_truncation_or_normalization() {
+    let fixture = Fixture::new().await;
+    let serials = [
+        "",
+        "12345678-1234-1234-1234-1234567890ABa",
+        "12345678-1234-1234-1234-1234567890ABb",
+        "disk ",
+        "disk\n",
+        "disk\0",
+        "disk/0",
+        "disk:0",
+        "disk-é",
+    ];
+    for serial in serials {
+        fixture.reply(StatusCode::OK, json!({"transport":"qemu", "volume_id":"0001-not-decoded/../../opaque", "node_id":"vm-incarnation-0123", "readonly":false, "device_serial":serial, "volume_mode":"filesystem", "fs_type":"xfs", "format_policy":"preformatted"}));
+        let error = fixture
+            .controller
+            .controller_publish_volume(Request::new(publish()))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::DataLoss, "serial {serial:?}");
+    }
+    assert_eq!(fixture.calls().len(), serials.len());
 }
 
 #[tokio::test]

@@ -167,10 +167,10 @@ impl csi::controller_server::Controller for CsiController {
                     ));
                 }
                 if device_serial.is_empty()
-                    || device_serial.len() > 256
-                    || device_serial
-                        .chars()
-                        .any(|c| c.is_control() || c.is_whitespace())
+                    || device_serial.len() > 36
+                    || !device_serial
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
                 {
                     return Err(Status::data_loss("Axo returned an invalid device serial"));
                 }
