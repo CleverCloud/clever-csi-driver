@@ -1,0 +1,382 @@
+openapi: 3.1.0
+info:
+  title: Proposed Axo CSI cluster API
+  version: clever-csi-v1
+  description: >-
+    Proposed server contract consumed by clever-csi-driver. These routes are not
+    implemented by the existing Axo repository. See axo-api.md for mandatory
+    ownership, durable idempotency, fencing, adoption and formatting semantics.
+    HTTP 202 is not completion. Success must represent verified postconditions.
+servers:
+  - url: https://axo.example.invalid/v4/kubernetes/organisations/{organisation_id}/clusters/{cluster_id}/csi
+    variables:
+      organisation_id: {default: orga-example}
+      cluster_id: {default: kubernetes-example}
+security:
+  - clusterBiscuit: []
+paths:
+  /capabilities:
+    get:
+      operationId: csiCapabilities
+      summary: Verify API contract and backend readiness
+      responses:
+        '200':
+          description: All advertised guarantees and dependencies are ready
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Capabilities'}
+        default: {$ref: '#/components/responses/Error'}
+  /volumes:
+    post:
+      operationId: ensureCsiVolume
+      summary: Ensure volume, clone or restore by stable CSI name
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EnsureVolume'}
+      responses:
+        '200': {$ref: '#/components/responses/Volume'}
+        '201': {$ref: '#/components/responses/Volume'}
+        default: {$ref: '#/components/responses/Error'}
+  /volumes/resolve:
+    post:
+      operationId: resolveCsiVolume
+      summary: Read and verify a handle and supplied metadata without adopting or billing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [volume_id, volume_context, parameters]
+              properties:
+                volume_id: {$ref: '#/components/schemas/Handle'}
+                volume_context: {$ref: '#/components/schemas/Parameters'}
+                parameters: {$ref: '#/components/schemas/Parameters'}
+      responses:
+        '200': {$ref: '#/components/responses/Volume'}
+        default: {$ref: '#/components/responses/Error'}
+  /volumes/delete:
+    post:
+      operationId: deleteCsiVolume
+      summary: Delete owned detached volume by immutable handle
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [volume_id]
+              properties:
+                volume_id: {$ref: '#/components/schemas/Handle'}
+      responses:
+        '204': {$ref: '#/components/responses/Deleted'}
+        default: {$ref: '#/components/responses/Error'}
+  /volumes/expand:
+    post:
+      operationId: expandCsiVolume
+      summary: Ensure increasing image and QEMU capacity after validating expected shape
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [volume_id, required_bytes]
+              properties:
+                volume_id: {$ref: '#/components/schemas/Handle'}
+                required_bytes: {type: integer, format: int64, minimum: 1}
+                limit_bytes: {type: [integer, 'null'], format: int64, minimum: 1}
+                expected_shape:
+                  oneOf:
+                    - {$ref: '#/components/schemas/VolumeShape'}
+                    - {type: 'null'}
+      responses:
+        '200': {$ref: '#/components/responses/Volume'}
+        default: {$ref: '#/components/responses/Error'}
+  /attachments:
+    post:
+      operationId: ensureCsiAttachment
+      summary: Reconcile fenced QEMU attachment or verified legacy pool no-op
+      description: >-
+        The legacy response is valid only for a node authoritatively classified
+        as legacy. Historical node names must never be resolved into QEMU targets.
+        New QEMU targets must identify an exact VM incarnation. Success requires
+        completed fencing and observed attachment, not an enqueued instruction.
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: '#/components/schemas/VolumeShape'}
+                - type: object
+                  required: [volume_id, node_id, readonly, volume_context]
+                  properties:
+                    volume_id: {$ref: '#/components/schemas/Handle'}
+                    node_id: {$ref: '#/components/schemas/NodeId'}
+                    readonly: {type: boolean}
+                    volume_context: {$ref: '#/components/schemas/Parameters'}
+      responses:
+        '200':
+          description: Attachment postconditions verified
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AttachmentRecord'}
+        default: {$ref: '#/components/responses/Error'}
+  /attachments/delete:
+    post:
+      operationId: deleteCsiAttachment
+      summary: Ensure completed detach; null node_id means all incarnations
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [volume_id, node_id]
+              properties:
+                volume_id: {$ref: '#/components/schemas/Handle'}
+                node_id:
+                  oneOf:
+                    - {$ref: '#/components/schemas/NodeId'}
+                    - {type: 'null'}
+      responses:
+        '204': {$ref: '#/components/responses/Deleted'}
+        default: {$ref: '#/components/responses/Error'}
+  /snapshots:
+    post:
+      operationId: ensureCsiSnapshot
+      summary: Ensure named snapshot of the specified owned source
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, source_volume_id, parameters]
+              properties:
+                name: {$ref: '#/components/schemas/CsiName'}
+                source_volume_id: {$ref: '#/components/schemas/Handle'}
+                parameters: {$ref: '#/components/schemas/Parameters'}
+      responses:
+        '200':
+          description: Snapshot record including readiness
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SnapshotRecord'}
+        default: {$ref: '#/components/responses/Error'}
+  /snapshots/delete:
+    post:
+      operationId: deleteCsiSnapshot
+      summary: Delete owned snapshot without breaking dependent clones
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [snapshot_id]
+              properties:
+                snapshot_id: {$ref: '#/components/schemas/Handle'}
+      responses:
+        '204': {$ref: '#/components/responses/Deleted'}
+        default: {$ref: '#/components/responses/Error'}
+  /snapshots/list:
+    post:
+      operationId: listCsiSnapshots
+      summary: Read a stable filtered page including adopted legacy snapshots
+      description: >-
+        Read-only. No matches return an empty page. Tokens are opaque, scoped to
+        the authorized cluster and filters. An expired or invalid token returns
+        400 clever.csi.invalid-pagination-token. Zero max_entries selects a
+        backend default, and next_token continues the listing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [max_entries]
+              properties:
+                snapshot_id:
+                  oneOf: [{$ref: '#/components/schemas/Handle'}, {type: 'null'}]
+                source_volume_id:
+                  oneOf: [{$ref: '#/components/schemas/Handle'}, {type: 'null'}]
+                starting_token: {type: [string, 'null'], maxLength: 8192}
+                max_entries: {type: integer, format: int32, minimum: 0}
+      responses:
+        '200':
+          description: Matching snapshot page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items: {$ref: '#/components/schemas/SnapshotRecord'}
+                  next_token: {type: [string, 'null'], maxLength: 8192}
+        default: {$ref: '#/components/responses/Error'}
+components:
+  securitySchemes:
+    clusterBiscuit:
+      type: http
+      scheme: bearer
+      bearerFormat: Biscuit
+      description: Cluster-scoped capability, verified by Axo on every operation
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Stable cluster/operation/resource key. Reconcile current state, never
+        replay an eternal cached success. Attach-detach-attach repeats the attach
+        key and must perform a new attachment with a new fencing generation.
+      schema: {type: string, pattern: '^csi-[0-9a-f]{64}$'}
+  responses:
+    Volume:
+      description: Verified initialized volume satisfying the request
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/VolumeRecord'}
+    Deleted:
+      description: Target resource is absent after verified completion
+    Error:
+      description: >-
+        See axo-api.md status mapping. Only 404 with code
+        clever.csi.resource-not-found indicates a missing owned resource and
+        permits idempotent delete success. A missing route must use another
+        code. Human error messages are not forwarded by the CSI client.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code]
+            properties:
+              code: {type: string}
+              message: {type: string}
+  schemas:
+    CsiName:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      pattern: '^[^\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]+$'
+      description: >-
+        Opaque CSI creation name, at most 1024 UTF-8 bytes. Unicode and ordinary
+        whitespace including tab, LF and CR are preserved. Never interpreted as
+        a path or command. Forbidden control ranges match CSI v1.12.0.
+    Handle:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      description: Opaque immutable handle, at most 1024 UTF-8 bytes, no control characters
+    NodeId:
+      type: string
+      minLength: 1
+      maxLength: 256
+      pattern: '^\S+$'
+      description: >-
+        New path requires exact VM incarnation. Reusable Node name accepted only
+        for authoritative legacy-krbd routing. Never route QEMU by name or IP.
+    Parameters:
+      type: object
+      maxProperties: 128
+      additionalProperties: {type: string, maxLength: 4096}
+      description: >-
+        Untrusted legacy Ceph/CSI metadata. Compare all pool, namespace, cluster
+        and filesystem hints to authoritative policy. Reject unsupported
+        parameters, RWX and encryption. This map never contains CSI Secret values.
+    VolumeShape:
+      oneOf:
+        - type: object
+          required: [volume_mode, fs_type]
+          properties:
+            volume_mode: {const: filesystem}
+            fs_type: {type: string, enum: [xfs, ext4]}
+        - type: object
+          required: [volume_mode]
+          properties:
+            volume_mode: {const: block}
+            fs_type: {type: 'null'}
+    ContentSource:
+      type: object
+      required: [type, id]
+      properties:
+        type: {type: string, enum: [snapshot, volume]}
+        id: {$ref: '#/components/schemas/Handle'}
+    EnsureVolume:
+      allOf:
+        - {$ref: '#/components/schemas/VolumeShape'}
+        - type: object
+          required: [name, required_bytes, parameters]
+          properties:
+            name: {$ref: '#/components/schemas/CsiName'}
+            required_bytes: {type: integer, format: int64, minimum: 1}
+            limit_bytes: {type: [integer, 'null'], format: int64, minimum: 1}
+            parameters: {$ref: '#/components/schemas/Parameters'}
+            source:
+              oneOf: [{$ref: '#/components/schemas/ContentSource'}, {type: 'null'}]
+    VolumeRecord:
+      allOf:
+        - {$ref: '#/components/schemas/VolumeShape'}
+        - type: object
+          required: [volume_id, capacity_bytes, format_policy]
+          properties:
+            volume_id: {$ref: '#/components/schemas/Handle'}
+            capacity_bytes: {type: integer, format: int64, minimum: 1}
+            format_policy: {const: preformatted}
+            source:
+              oneOf: [{$ref: '#/components/schemas/ContentSource'}, {type: 'null'}]
+    AttachmentRecord:
+      oneOf:
+        - type: object
+          required: [transport]
+          properties:
+            transport: {const: legacy-krbd}
+        - allOf:
+            - {$ref: '#/components/schemas/VolumeShape'}
+            - type: object
+              required: [transport, volume_id, node_id, device_serial, readonly, format_policy]
+              properties:
+                transport: {const: qemu}
+                volume_id: {$ref: '#/components/schemas/Handle'}
+                node_id: {$ref: '#/components/schemas/NodeId'}
+                device_serial: {type: string, minLength: 1, maxLength: 256, pattern: '^\S+$'}
+                readonly: {type: boolean}
+                format_policy: {const: preformatted}
+    SnapshotRecord:
+      type: object
+      required: [snapshot_id, source_volume_id, size_bytes, creation_time_seconds, creation_time_nanos, ready_to_use]
+      properties:
+        snapshot_id: {$ref: '#/components/schemas/Handle'}
+        source_volume_id: {$ref: '#/components/schemas/Handle'}
+        size_bytes: {type: integer, format: int64, minimum: 0}
+        creation_time_seconds: {type: integer, format: int64, minimum: -62135596800, maximum: 253402300799}
+        creation_time_nanos: {type: integer, format: int32, minimum: 0, maximum: 999999999}
+        ready_to_use: {type: boolean}
+    Capabilities:
+      type: object
+      required: [api_version, format_policy, features]
+      properties:
+        api_version: {const: clever-csi-v1}
+        format_policy: {const: preformatted}
+        features:
+          type: array
+          uniqueItems: true
+          items: {type: string}
+          description: >-
+            Required features: volume.ensure, volume.resolve, volume.delete,
+            volume.expand, volume.clone, volume.restore, attachment.ensure,
+            attachment.delete, snapshot.ensure, snapshot.delete, snapshot.list,
+            legacy-pool-routing, attachment.readonly.
