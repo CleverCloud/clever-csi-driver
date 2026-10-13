@@ -190,9 +190,8 @@ data. The final cycle repeated the filesystem, block, reattachment and statistic
 checks after the last source changes. Cleanup left no owned loop, test mount,
 backing file or node registry entry. Test PVs, PVCs, pods, VolumeAttachments,
 CSIDriver and RBAC objects were deleted, and the test entry was removed from
-CSINode while preserving existing drivers. At the final check the empty test
-namespace was still `Terminating`, with `ContentRemoved` and
-`ContentHasNoFinalizers` conditions confirming that no content remained.
+CSINode while preserving existing drivers. The test namespace was also removed;
+a final API lookup confirmed its absence.
 
 This exercises kubelet and sidecar reconciliation against the real driver, but
 still uses a local Axo fixture, fresh loop devices and synthetic sysfs transport
