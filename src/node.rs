@@ -104,6 +104,20 @@ fn validate_volume_id(value: &str) -> Result<(), Status> {
     Ok(())
 }
 
+fn validate_serial(value: &str) -> Result<(), Status> {
+    if value.is_empty()
+        || value.len() > 36
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+    {
+        return Err(Status::invalid_argument(
+            "device_serial must match [A-Za-z0-9._-]{1,36}",
+        ));
+    }
+    Ok(())
+}
+
 fn absolute_clean(path: &Path) -> bool {
     path.is_absolute()
         && path
@@ -347,7 +361,7 @@ impl NodeService {
         }
         for (id, volume) in &registry.volumes {
             validate_volume_id(id).map_err(|e| NodeError::Configuration(e.message().to_owned()))?;
-            validate_token(&volume.serial, "persisted device_serial", 256)
+            validate_serial(&volume.serial)
                 .map_err(|e| NodeError::Configuration(e.message().to_owned()))?;
             for path in std::iter::once(&volume.staging_path).chain(volume.published.keys()) {
                 target_path(&path.to_string_lossy(), &config.kubelet_root)
@@ -429,10 +443,72 @@ impl NodeService {
         let device = self.host.discover(&volume.serial).await?;
         if device != volume.device {
             return Err(Status::failed_precondition(
-                "device identity changed since staging; unstage before reuse",
+                "device identity changed since staging; restage after all mounts are gone",
             ));
         }
         Ok(device)
+    }
+
+    fn require_no_device_mounts(
+        &self,
+        mounts: &[Mount],
+        devices: &[&Device],
+        paths: &[&Path],
+    ) -> Result<(), Status> {
+        for mount in mounts {
+            // For a raw block bind, mountinfo describes devtmpfs, while the
+            // target inode's st_rdev identifies the actual volume device.
+            let raw_device = self.host.block_identity(&mount.target)?;
+            if paths.iter().any(|path| mount.target.starts_with(path))
+                || devices.iter().any(|device| {
+                    (mount.major, mount.minor) == (device.major, device.minor)
+                        || raw_device == Some((device.major, device.minor))
+                })
+            {
+                return Err(Status::failed_precondition(
+                    "mounts still reference the device or its registered paths; refusing ownership change",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    async fn reconcile_conflicting_registrations(
+        &self,
+        registry: &mut Registry,
+        owner: &str,
+        device: &Device,
+    ) -> Result<(), Status> {
+        let mut next = registry.clone();
+        let mut changed = false;
+        for (id, volume) in &mut next.volumes {
+            if id == owner
+                || (volume.device.major, volume.device.minor) != (device.major, device.minor)
+            {
+                continue;
+            }
+            let current = self.host.discover(&volume.serial).await?;
+            if (current.major, current.minor) == (device.major, device.minor) {
+                return Err(Status::already_exists("device is staged as another volume"));
+            }
+            let paths: Vec<&Path> = std::iter::once(volume.staging_path.as_path())
+                .chain(volume.published.keys().map(PathBuf::as_path))
+                .collect();
+            self.require_no_device_mounts(
+                &self.host.mounts().await?,
+                &[&volume.device, &current],
+                &paths,
+            )?;
+            // Reconcile the displaced volume *before* mounting this one. This
+            // handles disk-order permutations without interpreting our new mount
+            // as the displaced volume's old mount on its later Stage retry.
+            volume.device = current;
+            changed = true;
+        }
+        if changed {
+            self.update(registry, next)?;
+        }
+        Ok(())
     }
 
     async fn device_for_cleanup(&self, volume: &Volume) -> Result<(), Status> {
@@ -458,7 +534,7 @@ impl NodeService {
             }
             Mode::Block
                 if self.host.block_identity(path)?
-                    == (volume.device.major, volume.device.minor) =>
+                    == Some((volume.device.major, volume.device.minor)) =>
             {
                 Ok(())
             }
@@ -490,6 +566,49 @@ impl NodeService {
         std::fs::create_dir_all(path)
             .map_err(|e| Status::internal(format!("create volume directory: {e}")))?;
         no_symlinks(path)
+    }
+
+    fn remove_publish_target(&self, volume: &Volume, target: &Path) -> Result<(), Status> {
+        // Only called for a persisted publication after verifying that no mounts
+        // remain. Never follow symlinks or recursively delete content.
+        no_symlinks(target)?;
+        let metadata = match std::fs::symlink_metadata(target) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(Status::internal(format!("inspect publish target: {error}"))),
+        };
+        if let Some(metadata) = metadata {
+            let removed = match volume.spec.mode {
+                Mode::Filesystem(_) if metadata.is_dir() => std::fs::remove_dir(target),
+                Mode::Block if metadata.is_file() && metadata.len() == 0 => {
+                    std::fs::remove_file(target)
+                }
+                _ => {
+                    return Err(Status::failed_precondition(
+                        "publish target is not an empty owned placeholder",
+                    ));
+                }
+            };
+            removed.map_err(|_| {
+                Status::failed_precondition(
+                    "cannot remove publish target; it must be empty and unmounted",
+                )
+            })?;
+        }
+        // Also sync on retry after a successful unlink but failed directory
+        // fsync. Only then may the durable publication intent be forgotten.
+        if let Some(parent) = target.parent() {
+            match File::open(parent) {
+                Ok(directory) => directory.sync_all().map_err(|error| {
+                    Status::internal(format!("persist target removal: {error}"))
+                })?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(error) => {
+                    return Err(Status::internal(format!("persist target removal: {error}")));
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn stage_mount(&self, volume: &Volume) -> Result<(), Status> {
@@ -564,14 +683,16 @@ impl csi::node_server::Node for NodeService {
             .publish_context
             .get("device_serial")
             .ok_or_else(|| Status::invalid_argument("publish_context.device_serial is required"))?;
-        validate_token(serial, "device_serial", 256)?;
+        validate_serial(serial)?;
         let spec = spec(request.volume_capability.as_ref(), &request.publish_context)?;
         let mut registry = self.registry.lock().await;
         Self::require_unclaimed_path(&registry, &path, &request.volume_id, true)?;
         let device = self.host.discover(serial).await?;
-        if registry.volumes.iter().any(|(id, volume)| {
-            id != &request.volume_id && (volume.serial == *serial || volume.device == device)
-        }) {
+        if registry
+            .volumes
+            .iter()
+            .any(|(id, volume)| id != &request.volume_id && volume.serial == *serial)
+        {
             return Err(Status::already_exists(
                 "device is already staged as a different volume",
             ));
@@ -583,28 +704,41 @@ impl csi::node_server::Node for NodeService {
                 "device lacks the expected preformatted filesystem; formatting is forbidden, including for adopted volumes",
             ));
         }
-        let volume = if let Some(existing) = registry.volumes.get(&request.volume_id) {
-            if existing.serial != *serial
-                || existing.device != device
+        if let Some(existing) = registry.volumes.get(&request.volume_id)
+            && (existing.serial != *serial
                 || existing.staging_path != path
-                || existing.spec != spec
-            {
-                return Err(Status::already_exists(
-                    "volume is staged with different parameters",
-                ));
+                || existing.spec != spec)
+        {
+            return Err(Status::already_exists(
+                "volume is staged with different parameters",
+            ));
+        }
+        // Historical coordinates of another volume may now belong to this
+        // serial. Resolve and safely persist that other identity before mounting.
+        self.reconcile_conflicting_registrations(&mut registry, &request.volume_id, &device)
+            .await?;
+        let volume = if let Some(existing) = registry.volumes.get(&request.volume_id) {
+            let mut volume = existing.clone();
+            if volume.device != device {
+                // A reboot may change /dev names and dev_t. Serial remains the
+                // authority, but an old or foreign mount must never be rebound
+                // to the newly enumerated device, even when state says otherwise.
+                let mounts = self.host.mounts().await?;
+                let paths: Vec<&Path> = std::iter::once(volume.staging_path.as_path())
+                    .chain(volume.published.keys().map(PathBuf::as_path))
+                    .collect();
+                self.require_no_device_mounts(&mounts, &[&volume.device, &device], &paths)?;
+                volume.device = device;
+                let mut next = registry.clone();
+                next.volumes
+                    .insert(request.volume_id.clone(), volume.clone());
+                self.update(&mut registry, next)?;
             }
-            existing.clone()
+            volume
         } else {
             // Do not take ownership of mounts created outside this state registry.
             let mounts = self.host.mounts().await?;
-            if mounts.iter().any(|mount| {
-                mount.target.starts_with(&path)
-                    || (mount.major == device.major && mount.minor == device.minor)
-            }) {
-                return Err(Status::failed_precondition(
-                    "unregistered mount exists for this device or staging path",
-                ));
-            }
+            self.require_no_device_mounts(&mounts, &[&device], &[&path])?;
             let volume = Volume {
                 serial: serial.clone(),
                 device,
@@ -644,22 +778,24 @@ impl csi::node_server::Node for NodeService {
                 "publish parameters differ from staged volume",
             ));
         }
-        if !request.readonly && volume.spec.flags.iter().any(|flag| flag == "ro") {
-            return Err(Status::failed_precondition(
-                "cannot publish a read-only stage as writable",
-            ));
-        }
         Self::require_unclaimed_path(&registry, &target, &request.volume_id, false)?;
-        if volume.spec.access_mode == 6 && volume.published.keys().any(|path| path != &target) {
-            return Err(Status::failed_precondition(
-                "SINGLE_NODE_SINGLE_WRITER already has a publication",
-            ));
-        }
         self.current_device(&volume).await?;
         if matches!(volume.spec.mode, Mode::Filesystem(_)) {
             self.checked_volume_path(&volume, &staging).await?;
         }
-        let readonly = request.readonly;
+        let readonly = request.readonly || volume.spec.flags.iter().any(|flag| flag == "ro");
+        if matches!(volume.spec.mode, Mode::Block) && readonly {
+            // A read-only bind mount does not prevent writes to a device inode.
+            // Never set device-wide RO here: another pod may already use it RW.
+            if request.publish_context.get("readonly").map(String::as_str) != Some("true")
+                || !self.host.readonly(&volume.device).await?
+            {
+                return Err(Status::failed_precondition(
+                    "read-only block publication requires a read-only backend attachment and verified Linux block protection",
+                ));
+            }
+            self.current_device(&volume).await?;
+        }
         let publish_flags = flags(
             &volume.spec.flags,
             matches!(volume.spec.mode, Mode::Block),
@@ -755,26 +891,35 @@ impl csi::node_server::Node for NodeService {
             .volumes
             .get(&request.volume_id)
             .filter(|v| v.published.contains_key(&target));
+        if mounts
+            .iter()
+            .any(|m| m.target != target && m.target.starts_with(&target))
+        {
+            return Err(Status::failed_precondition(
+                "publish target contains nested mounts",
+            ));
+        }
         if let Some(mount) = mounted {
             let volume = volume.ok_or_else(|| {
                 Status::failed_precondition("refusing to unmount an unregistered target")
             })?;
             self.device_for_cleanup(volume).await?;
             self.verify_mount(volume, mount, &target)?;
-            if mounts
-                .iter()
-                .any(|m| m.target != target && m.target.starts_with(&target))
-            {
-                return Err(Status::failed_precondition(
-                    "publish target contains nested mounts",
-                ));
-            }
             self.host.unmount(&target).await?;
-            if unique_mount(&self.host.mounts().await?, &target)?.is_some() {
+            if self
+                .host
+                .mounts()
+                .await?
+                .iter()
+                .any(|mount| mount.target.starts_with(&target))
+            {
                 return Err(Status::internal("target remains mounted"));
             }
         }
-        if volume.is_some() {
+        if let Some(volume) = volume {
+            // Keep the durable publication intent until deletion succeeds so
+            // a retry can finish cleanup after an unmount or process restart.
+            self.remove_publish_target(volume, &target)?;
             let mut next = registry.clone();
             next.volumes
                 .get_mut(&request.volume_id)

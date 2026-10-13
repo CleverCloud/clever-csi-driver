@@ -65,6 +65,10 @@ struct LoopDisk {
 
 impl LoopDisk {
     fn new(backing: PathBuf, bytes: u64) -> Self {
+        Self::with_readonly(backing, bytes, false)
+    }
+
+    fn with_readonly(backing: PathBuf, bytes: u64, readonly: bool) -> Self {
         File::create(&backing).unwrap().set_len(bytes).unwrap();
         // Docker's private /dev does not receive host udev events. loop-control
         // can allocate an index whose block node is not yet visible here.
@@ -83,10 +87,12 @@ impl LoopDisk {
             )
             .unwrap();
         }
-        let device = PathBuf::from(run(
-            "losetup",
-            &["--find".as_ref(), "--show".as_ref(), backing.as_os_str()],
-        ));
+        let mut args = vec!["--find".as_ref(), "--show".as_ref()];
+        if readonly {
+            args.push("--read-only".as_ref());
+        }
+        args.push(backing.as_os_str());
+        let device = PathBuf::from(run("losetup", &args));
         // The only loop devices we touch are returned by this allocation.
         assert!(
             device.starts_with("/dev")
@@ -285,6 +291,9 @@ async fn lifecycle(root: &Path, fs_type: Option<&str>) {
         kubelet_root: root.join("kubelet"),
     };
     fixture_serial(&config.sys_block_dir, &disk, &format!("test-{name}"));
+    let unrelated = config.sys_block_dir.join("unrelated/device");
+    std::fs::create_dir_all(&unrelated).unwrap();
+    std::fs::write(unrelated.join("vpd_pg80"), [0, 0x80, 0, 20, b'x']).unwrap();
     let stage = config.kubelet_root.join("plugins/test/globalmount");
     let target = config.kubelet_root.join("pods/test/volume/mount");
     disk.targets = vec![stage.clone(), target.clone()];
@@ -304,6 +313,30 @@ async fn lifecycle(root: &Path, fs_type: Option<&str>) {
         ..Default::default()
     };
     let service = NodeService::new(config.clone()).unwrap();
+    if fs_type.is_none() {
+        let foreign = root.join("foreign-block-bind");
+        File::create(&foreign).unwrap();
+        disk.targets.push(foreign.clone());
+        run(
+            "mount",
+            &[
+                "--bind".as_ref(),
+                disk.device.as_os_str(),
+                foreign.as_os_str(),
+            ],
+        );
+        assert_eq!(
+            service
+                .node_stage_volume(Request::new(stage_request.clone()))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::FailedPrecondition
+        );
+        assert!(disk.mount_belongs_to_loop(&foreign));
+        run("umount", &[foreign.as_os_str()]);
+        std::fs::remove_file(foreign).unwrap();
+    }
     service
         .node_stage_volume(Request::new(stage_request.clone()))
         .await
@@ -312,6 +345,25 @@ async fn lifecycle(root: &Path, fs_type: Option<&str>) {
         .node_publish_volume(Request::new(publish_request.clone()))
         .await
         .unwrap();
+    if fs_type.is_none() {
+        let mut unsafe_readonly = publish_request.clone();
+        unsafe_readonly.readonly = true;
+        unsafe_readonly.target_path += "-readonly";
+        let rejected_target = PathBuf::from(&unsafe_readonly.target_path);
+        assert_eq!(
+            service
+                .node_publish_volume(Request::new(unsafe_readonly))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::FailedPrecondition
+        );
+        assert!(!rejected_target.exists());
+        assert_eq!(
+            run("blockdev", &["--getro".as_ref(), disk.device.as_os_str()]),
+            "0"
+        );
+    }
     let payload: Vec<u8> = (0..MIB).map(|index| (index % 251) as u8).collect();
     let data_path = if fs_type.is_some() {
         target.join("verified-payload")
@@ -348,11 +400,11 @@ async fn lifecycle(root: &Path, fs_type: Option<&str>) {
     drop(service);
     let service = NodeService::new(config).unwrap();
     service
-        .node_stage_volume(Request::new(stage_request))
+        .node_stage_volume(Request::new(stage_request.clone()))
         .await
         .unwrap();
     service
-        .node_publish_volume(Request::new(publish_request))
+        .node_publish_volume(Request::new(publish_request.clone()))
         .await
         .unwrap();
     assert_eq!(
@@ -422,7 +474,126 @@ async fn lifecycle(root: &Path, fs_type: Option<&str>) {
     }
     assert!(!disk.mount_belongs_to_loop(&target));
     assert!(!disk.mount_belongs_to_loop(&stage));
+    assert!(!target.exists(), "Unpublish must remove its target");
+    assert!(stage.is_dir(), "the staging directory belongs to the CO");
+    if fs_type.is_some() {
+        // A mount capability may require RO even when attachment and Publish
+        // readonly are false. The publication must retain the stronger stage mode.
+        let mut readonly_stage = stage_request;
+        if let Some(csi::volume_capability::AccessType::Mount(mount)) = readonly_stage
+            .volume_capability
+            .as_mut()
+            .unwrap()
+            .access_type
+            .as_mut()
+        {
+            mount.mount_flags.push("ro".into());
+        }
+        let mut readonly_publish = publish_request;
+        readonly_publish.volume_capability = readonly_stage.volume_capability.clone();
+        service
+            .node_stage_volume(Request::new(readonly_stage))
+            .await
+            .unwrap();
+        service
+            .node_publish_volume(Request::new(readonly_publish))
+            .await
+            .unwrap();
+        assert!(OpenOptions::new().write(true).open(&data_path).is_err());
+        assert_eq!(digest(&data_path), before);
+        service
+            .node_unpublish_volume(Request::new(unpublish))
+            .await
+            .unwrap();
+        service
+            .node_unstage_volume(Request::new(unstage))
+            .await
+            .unwrap();
+        assert!(!target.exists());
+        assert!(stage.is_dir());
+    }
     eprintln!("{name}: real stage/publish, checksum, restart, stats, resize and cleanup passed");
+}
+
+async fn protected_readonly_block(root: &Path) {
+    let root = root.join("readonly-block");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut disk = LoopDisk::with_readonly(root.join("readonly.raw"), 8 * MIB, true);
+    assert_eq!(
+        run("blockdev", &["--getro".as_ref(), disk.device.as_os_str()]),
+        "1"
+    );
+    let before = digest(&disk.device);
+    let config = NodeConfig {
+        node_id: "vm-linux-integration-test".into(),
+        state_dir: root.join("state"),
+        device_root: "/dev".into(),
+        sys_block_dir: root.join("synthetic-sysfs-block"),
+        kubelet_root: root.join("kubelet"),
+    };
+    fixture_serial(&config.sys_block_dir, &disk, "test-readonly-block");
+    let stage = config.kubelet_root.join("plugins/test/globalmount");
+    let target = config.kubelet_root.join("pods/test/volume/mount");
+    disk.targets = vec![stage.clone(), target.clone()];
+    let mut publish_context = context("test-readonly-block", None);
+    publish_context.insert("readonly".into(), "true".into());
+    let service = NodeService::new(config.clone()).unwrap();
+    service
+        .node_stage_volume(Request::new(csi::NodeStageVolumeRequest {
+            volume_id: "readonly-block".into(),
+            staging_target_path: stage.to_string_lossy().into(),
+            publish_context: publish_context.clone(),
+            volume_capability: Some(capability(None)),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let publish = csi::NodePublishVolumeRequest {
+        volume_id: "readonly-block".into(),
+        staging_target_path: stage.to_string_lossy().into(),
+        target_path: target.to_string_lossy().into(),
+        publish_context,
+        volume_capability: Some(capability(None)),
+        readonly: false,
+        ..Default::default()
+    };
+    service
+        .node_publish_volume(Request::new(publish.clone()))
+        .await
+        .unwrap();
+    drop(service);
+    let service = NodeService::new(config).unwrap();
+    service
+        .node_publish_volume(Request::new(publish))
+        .await
+        .unwrap();
+    // Linux must deny an actual device write, not merely report a RO bind flag.
+    if let Ok(mut writer) = OpenOptions::new().write(true).open(&target) {
+        assert!(
+            writer
+                .write_all(b"must not reach the backing image")
+                .is_err()
+        );
+    }
+    assert_eq!(digest(&target), before);
+    service
+        .node_unpublish_volume(Request::new(csi::NodeUnpublishVolumeRequest {
+            volume_id: "readonly-block".into(),
+            target_path: target.to_string_lossy().into(),
+        }))
+        .await
+        .unwrap();
+    service
+        .node_unstage_volume(Request::new(csi::NodeUnstageVolumeRequest {
+            volume_id: "readonly-block".into(),
+            staging_target_path: stage.to_string_lossy().into(),
+        }))
+        .await
+        .unwrap();
+    assert!(!target.exists());
+    assert!(stage.is_dir());
+    assert_eq!(digest(&disk.device), before);
+    eprintln!("raw block read-only: backend+Linux protection denies writes and survives restart");
 }
 
 async fn blank_adopted_volume_is_unchanged(root: &Path) {
@@ -491,6 +662,7 @@ async fn real_linux_filesystem_and_block_lifecycle() {
     lifecycle(&directory, Some("xfs")).await;
     lifecycle(&directory, Some("ext4")).await;
     lifecycle(&directory, None).await;
+    protected_readonly_block(&directory).await;
     blank_adopted_volume_is_unchanged(&directory).await;
     std::fs::remove_dir_all(directory).unwrap();
 }

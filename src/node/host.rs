@@ -54,8 +54,9 @@ pub(super) trait Host: Send + Sync {
     async fn unmount(&self, target: &Path) -> Result<(), Status>;
     async fn grow(&self, device: &Device, target: &Path, fs_type: &str) -> Result<(), Status>;
     async fn capacity(&self, device: &Device) -> Result<i64, Status>;
+    async fn readonly(&self, device: &Device) -> Result<bool, Status>;
     async fn rescan(&self, device: &Device, serial: &str) -> Result<(), Status>;
-    fn block_identity(&self, target: &Path) -> Result<(u64, u64), Status>;
+    fn block_identity(&self, target: &Path) -> Result<Option<(u64, u64)>, Status>;
     fn usage(&self, target: &Path) -> Result<Usage, Status>;
 }
 
@@ -81,12 +82,46 @@ fn vpd_serial(bytes: &[u8]) -> Result<String, Status> {
     }
     let serial = std::str::from_utf8(&bytes[4..])
         .map_err(|_| Status::failed_precondition("SCSI unit serial is not ASCII"))?;
-    if !serial.bytes().all(|byte| byte.is_ascii_graphic()) {
+    // libata pads the fixed-width ATA serial with spaces in page 0x80.
+    // Strip transport padding only; never truncate or rewrite the identifier.
+    let serial = serial.trim_matches(' ');
+    if serial.is_empty() || !serial.bytes().all(|byte| byte.is_ascii_graphic()) {
         return Err(Status::failed_precondition(
             "SCSI unit serial contains non-printable bytes or whitespace",
         ));
     }
     Ok(serial.to_owned())
+}
+
+async fn matching_serial(root: &Path, serial: &str) -> Result<bool, Status> {
+    let mut values = Vec::new();
+    let mut invalid = false;
+    for name in ["serial", "device/serial"] {
+        match tokio::fs::read_to_string(root.join(name)).await {
+            Ok(value) => values.push(value.trim_matches([' ', '\n', '\r']).to_owned()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(_) => invalid = true,
+        }
+    }
+    match tokio::fs::read(root.join("device/vpd_pg80")).await {
+        Ok(bytes) => match vpd_serial(&bytes) {
+            Ok(value) => values.push(value),
+            Err(_) => invalid = true,
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(_) => invalid = true,
+    }
+    if !values.iter().any(|value| value == serial) {
+        // An unrelated disk (or an entry disappearing during hotplug) must not
+        // prevent finding this volume. A matching candidate still fails closed.
+        return Ok(false);
+    }
+    if invalid || values.iter().any(|value| value != serial) {
+        return Err(Status::failed_precondition(
+            "conflicting or unreadable serial attributes for the matching block device",
+        ));
+    }
+    Ok(true)
 }
 
 fn io_status(action: &str, error: impl std::fmt::Display) -> Status {
@@ -184,26 +219,8 @@ impl Host for LinuxHost {
             .map_err(|e| io_status("read sysfs device", e))?
         {
             let root = entry.path();
-            let mut values = Vec::new();
-            for name in ["serial", "device/serial"] {
-                match tokio::fs::read_to_string(root.join(name)).await {
-                    Ok(value) => values.push(value.trim_end_matches(['\n', '\r']).to_owned()),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-                    Err(e) => return Err(io_status("read device serial", e)),
-                }
-            }
-            match tokio::fs::read(root.join("device/vpd_pg80")).await {
-                Ok(bytes) => values.push(vpd_serial(&bytes)?),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-                Err(error) => return Err(io_status("read SCSI serial page", error)),
-            }
-            if !values.iter().any(|value| value == serial) {
+            if !matching_serial(&root, serial).await? {
                 continue;
-            }
-            if values.iter().any(|value| value != serial) {
-                return Err(Status::failed_precondition(
-                    "conflicting serial attributes for a block device",
-                ));
             }
             let path = self.device_root.join(entry.file_name());
             let canonical = tokio::fs::canonicalize(&path)
@@ -371,6 +388,26 @@ impl Host for LinuxHost {
             .map_err(|_| Status::internal("invalid block device size"))
     }
 
+    async fn readonly(&self, device: &Device) -> Result<bool, Status> {
+        let output = command(
+            "blockdev",
+            &["--getro".into(), device.path.as_os_str().into()],
+        )
+        .await?;
+        if !output.status.success() {
+            return Err(Status::failed_precondition(
+                "cannot verify block device read-only protection",
+            ));
+        }
+        match output.stdout.as_slice() {
+            b"1\n" => Ok(true),
+            b"0\n" => Ok(false),
+            _ => Err(Status::failed_precondition(
+                "invalid block device read-only status",
+            )),
+        }
+    }
+
     async fn rescan(&self, device: &Device, serial: &str) -> Result<(), Status> {
         // Never derive a sysfs write path from caller-supplied context. Recheck
         // the serial and dev_t immediately before writing to the discovered disk.
@@ -407,18 +444,19 @@ impl Host for LinuxHost {
         Ok(())
     }
 
-    fn block_identity(&self, target: &Path) -> Result<(u64, u64), Status> {
-        let metadata =
-            std::fs::metadata(target).map_err(|e| io_status("stat published device", e))?;
+    fn block_identity(&self, target: &Path) -> Result<Option<(u64, u64)>, Status> {
+        let metadata = match std::fs::metadata(target) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(io_status("stat mount target", error)),
+        };
         if !metadata.file_type().is_block_device() {
-            return Err(Status::failed_precondition(
-                "published path is not a block device",
-            ));
+            return Ok(None);
         }
-        Ok((
+        Ok(Some((
             nix::sys::stat::major(metadata.rdev()),
             nix::sys::stat::minor(metadata.rdev()),
-        ))
+        )))
     }
 
     fn usage(&self, target: &Path) -> Result<Usage, Status> {
@@ -467,6 +505,10 @@ mod tests {
         let mut page = vec![0, 0x80, 1, 0];
         page.extend(long);
         assert_eq!(vpd_serial(&page).unwrap().len(), 256);
+        let mut ata_page = vec![0, 0x80, 0, 20];
+        ata_page.extend_from_slice(b"  ATA-device-42");
+        ata_page.resize(24, b' ');
+        assert_eq!(vpd_serial(&ata_page).unwrap(), "ATA-device-42");
     }
 
     #[test]
@@ -482,5 +524,31 @@ mod tests {
         ] {
             assert!(vpd_serial(&bytes).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn unrelated_bad_serial_pages_are_isolated_but_matching_conflicts_fail_closed() {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/node-tests");
+        std::fs::create_dir_all(&base).unwrap();
+        let root = tempfile::tempdir_in(base).unwrap();
+        std::fs::create_dir(root.path().join("device")).unwrap();
+        let vpd = root.path().join("device/vpd_pg80");
+        std::fs::write(&vpd, [0, 0x80, 0, 20, b'x']).unwrap();
+        assert!(!matching_serial(root.path(), "wanted").await.unwrap());
+        std::fs::write(root.path().join("serial"), b"wanted\n").unwrap();
+        assert_eq!(
+            matching_serial(root.path(), "wanted")
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::FailedPrecondition
+        );
+        std::fs::write(&vpd, [0, 0x80, 0, 5, b'o', b't', b'h', b'e', b'r']).unwrap();
+        assert!(matching_serial(root.path(), "wanted").await.is_err());
+        let mut page = vec![0, 0x80, 0, 8];
+        page.extend_from_slice(b" wanted ");
+        std::fs::write(&vpd, page).unwrap();
+        assert!(matching_serial(root.path(), "wanted").await.unwrap());
+        assert!(!matching_serial(root.path(), "wante").await.unwrap());
     }
 }
