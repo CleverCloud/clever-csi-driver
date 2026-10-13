@@ -10,7 +10,8 @@ use axum::{
     Router,
     body::{Body, to_bytes},
     extract::{Request as HttpRequest, State},
-    http::StatusCode,
+    http::{Method, StatusCode},
+    routing::{get, post},
 };
 use clever_csi_driver::{
     axo::REQUIRED_FEATURES,
@@ -23,6 +24,7 @@ use tonic::{Code, Request};
 
 #[derive(Clone, Debug)]
 struct Call {
+    method: Method,
     path: String,
     authorization: String,
     key: Option<String>,
@@ -32,11 +34,14 @@ struct Reply {
     status: StatusCode,
     body: Value,
     delay: Duration,
+    location: Option<String>,
+    chunked: bool,
 }
 #[derive(Default)]
 struct MockState {
     calls: Vec<Call>,
     replies: VecDeque<Reply>,
+    capability_replies: VecDeque<Reply>,
 }
 
 struct Fixture {
@@ -55,7 +60,28 @@ impl Drop for Fixture {
 impl Fixture {
     async fn new() -> Self {
         let state = Arc::new(Mutex::new(MockState::default()));
-        let router = Router::new().fallback(mock).with_state(state.clone());
+        // Explicit method/path registration: a wrong route or HTTP method must
+        // fail the test rather than consume the next successful canned reply.
+        let mut router = Router::new().route("/capabilities", get(mock));
+        for route in [
+            "/volumes",
+            "/volumes/resolve",
+            "/volumes/delete",
+            "/volumes/expand",
+            "/attachments",
+            "/attachments/delete",
+            "/snapshots",
+            "/snapshots/delete",
+            "/snapshots/list",
+        ] {
+            router = router.route(route, post(mock));
+        }
+        let router = Router::new()
+            .nest(
+                "/v4/kubernetes/organisations/orga-test/clusters/kubernetes-test/csi",
+                router,
+            )
+            .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
@@ -87,9 +113,31 @@ impl Fixture {
             status,
             body,
             delay: Duration::ZERO,
+            location: None,
+            chunked: false,
         });
     }
+    fn capability_reply(&self, status: StatusCode, body: Value) {
+        self.state
+            .lock()
+            .unwrap()
+            .capability_replies
+            .push_back(Reply {
+                status,
+                body,
+                delay: Duration::ZERO,
+                location: None,
+                chunked: false,
+            });
+    }
+    /// Application operations, excluding the attachment feature preflight.
     fn calls(&self) -> Vec<Call> {
+        self.all_calls()
+            .into_iter()
+            .filter(|call| !call.path.ends_with("/capabilities"))
+            .collect()
+    }
+    fn all_calls(&self) -> Vec<Call> {
         self.state.lock().unwrap().calls.clone()
     }
 }
@@ -98,7 +146,14 @@ async fn mock(
     State(state): State<Arc<Mutex<MockState>>>,
     request: HttpRequest,
 ) -> axum::response::Response {
-    let path = request.uri().path().to_owned();
+    let path = request
+        .extensions()
+        .get::<axum::extract::OriginalUri>()
+        .unwrap()
+        .0
+        .path()
+        .to_owned();
+    let method = request.method().clone();
     let authorization = request
         .headers()
         .get("authorization")
@@ -119,23 +174,52 @@ async fn mock(
     let reply = {
         let mut state = state.lock().unwrap();
         state.calls.push(Call {
+            method,
             path,
             authorization,
             key,
             body,
         });
-        state.replies.pop_front().unwrap_or(Reply {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            body: json!({}),
-            delay: Duration::ZERO,
-        })
+        if state.calls.last().unwrap().path.ends_with("/capabilities") {
+            state.capability_replies.pop_front().unwrap_or(Reply {
+                status: StatusCode::OK,
+                body: backend_capabilities(),
+                delay: Duration::ZERO,
+                location: None,
+                chunked: false,
+            })
+        } else {
+            state.replies.pop_front().unwrap_or(Reply {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                body: json!({}),
+                delay: Duration::ZERO,
+                location: None,
+                chunked: false,
+            })
+        }
     };
     tokio::time::sleep(reply.delay).await;
-    axum::response::Response::builder()
+    let mut builder = axum::response::Response::builder()
         .status(reply.status)
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&reply.body).unwrap()))
-        .unwrap()
+        .header("content-type", "application/json");
+    if let Some(location) = reply.location {
+        builder = builder.header("location", location);
+    }
+    let bytes = serde_json::to_vec(&reply.body).unwrap();
+    let body = if reply.chunked {
+        let chunks: Vec<Result<Vec<u8>, std::io::Error>> = bytes
+            .chunks(16384)
+            .map(|chunk| Ok(chunk.to_vec()))
+            .collect();
+        Body::from_stream(tokio_stream::iter(chunks))
+    } else {
+        Body::from(bytes)
+    };
+    builder.body(body).unwrap()
+}
+
+fn backend_capabilities() -> Value {
+    json!({"api_version":"clever-csi-v1", "format_policy":"preformatted", "features":REQUIRED_FEATURES})
 }
 
 fn cap(fs: Option<&str>) -> csi::VolumeCapability {
@@ -185,6 +269,576 @@ fn publish() -> csi::ControllerPublishVolumeRequest {
         volume_capability: Some(cap(Some("xfs"))),
         volume_context: HashMap::from([("clusterID".into(), "legacy-ceph-id".into())]),
         ..Default::default()
+    }
+}
+
+fn attachment_record() -> Value {
+    json!({"transport":"qemu", "volume_id":"0001-not-decoded/../../opaque", "node_id":"vm-incarnation-0123", "readonly":false, "device_serial":"serial", "volume_mode":"filesystem", "fs_type":"xfs", "format_policy":"preformatted"})
+}
+
+#[tokio::test]
+async fn attach_checks_features_then_sends_the_transport_allowlist() {
+    let fixture = Fixture::new().await;
+    fixture.reply(StatusCode::OK, attachment_record());
+    fixture
+        .controller
+        .controller_publish_volume(Request::new(publish()))
+        .await
+        .unwrap();
+    let calls = fixture.all_calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].method, Method::GET);
+    assert!(calls[0].path.ends_with("/capabilities"));
+    assert_eq!(calls[0].body, Value::Null);
+    assert!(calls[0].key.is_none());
+    assert_eq!(calls[1].method, Method::POST);
+    assert!(calls[1].path.ends_with("/attachments"));
+    assert_eq!(
+        calls[1].body["allowed_transports"],
+        json!(["legacy-krbd", "qemu"])
+    );
+}
+
+#[tokio::test]
+async fn legacy_capabilities_reach_authoritative_routing_without_permitting_qemu() {
+    let mut requests = Vec::new();
+    let mut rwx = publish();
+    rwx.volume_capability = Some(cap(None));
+    rwx.volume_capability
+        .as_mut()
+        .unwrap()
+        .access_mode
+        .as_mut()
+        .unwrap()
+        .mode = 5;
+    requests.push(rwx);
+    let mut rox = publish();
+    rox.readonly = true;
+    rox.volume_capability
+        .as_mut()
+        .unwrap()
+        .access_mode
+        .as_mut()
+        .unwrap()
+        .mode = 3;
+    requests.push(rox);
+    let mut fs = publish();
+    fs.volume_capability = Some(cap(Some("btrfs")));
+    requests.push(fs);
+    let mut options = publish();
+    if let Some(csi::volume_capability::AccessType::Mount(mount)) =
+        &mut options.volume_capability.as_mut().unwrap().access_type
+    {
+        mount.mount_flags = vec!["prjquota".into(), "inode64".into()];
+    }
+    requests.push(options);
+    for (key, value) in [
+        ("encrypted", "true"),
+        ("encryptionKMSID", "legacy-kms"),
+        ("mounter", "rbd-nbd"),
+    ] {
+        let mut request = publish();
+        request.volume_context.insert(key.into(), value.into());
+        requests.push(request);
+    }
+    for request in requests {
+        let fixture = Fixture::new().await;
+        fixture.reply(StatusCode::OK, json!({"transport":"legacy-krbd"}));
+        let result = fixture
+            .controller
+            .controller_publish_volume(Request::new(request.clone()))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(result.publish_context.is_empty());
+        let calls = fixture.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].body["allowed_transports"], json!(["legacy-krbd"]));
+        assert_eq!(
+            calls[0].body["volume_context"],
+            json!(request.volume_context)
+        );
+        // The backend, not the syntax of this VM-looking ID, chooses the route.
+        assert_eq!(calls[0].body["node_id"], request.node_id);
+    }
+}
+
+#[tokio::test]
+async fn qemu_is_never_published_after_a_legacy_only_request() {
+    let fixture = Fixture::new().await;
+    fixture.reply(StatusCode::OK, attachment_record());
+    let mut request = publish();
+    request
+        .volume_context
+        .insert("encrypted".into(), "true".into());
+    assert_eq!(
+        fixture
+            .controller
+            .controller_publish_volume(Request::new(request))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::Unavailable
+    );
+    assert_eq!(
+        fixture.calls()[0].body["allowed_transports"],
+        json!(["legacy-krbd"])
+    );
+}
+
+#[tokio::test]
+async fn attachment_feature_is_mandatory_and_rechecked_before_each_mutation() {
+    let fixture = Fixture::new().await;
+    fixture.reply(StatusCode::OK, attachment_record());
+    fixture
+        .controller
+        .controller_publish_volume(Request::new(publish()))
+        .await
+        .unwrap();
+    let mut old_caps = backend_capabilities();
+    old_caps["features"] = json!(
+        REQUIRED_FEATURES
+            .iter()
+            .filter(|feature| **feature != "attachment.allowed-transports")
+            .collect::<Vec<_>>()
+    );
+    fixture.capability_reply(StatusCode::OK, old_caps.clone());
+    assert_eq!(
+        fixture
+            .controller
+            .controller_publish_volume(Request::new(publish()))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::FailedPrecondition
+    );
+    assert_eq!(fixture.calls().len(), 1); // the second POST was never sent
+    assert_eq!(fixture.all_calls().len(), 3);
+    fixture.capability_reply(StatusCode::OK, old_caps);
+    assert_eq!(
+        fixture.controller.ready().await.unwrap_err().code(),
+        Code::FailedPrecondition
+    );
+}
+
+#[tokio::test]
+async fn malformed_or_secret_attachment_metadata_never_reaches_http() {
+    let fixture = Fixture::new().await;
+    let mut malformed = publish();
+    malformed.volume_capability.as_mut().unwrap().access_mode = None;
+    let mut secret = publish();
+    secret
+        .volume_context
+        .insert("userKey".into(), "not-forwarded".into());
+    let mut readonly = publish();
+    readonly
+        .volume_capability
+        .as_mut()
+        .unwrap()
+        .access_mode
+        .as_mut()
+        .unwrap()
+        .mode = 3;
+    for request in [malformed, secret, readonly] {
+        assert_eq!(
+            fixture
+                .controller
+                .controller_publish_volume(Request::new(request))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::InvalidArgument
+        );
+    }
+    assert!(fixture.all_calls().is_empty());
+}
+
+#[tokio::test]
+async fn expansion_of_legacy_capabilities_preserves_the_existing_filesystem() {
+    for fs in ["btrfs", "", "xfs"] {
+        let fixture = Fixture::new().await;
+        let actual_fs = if fs.is_empty() { "ext4" } else { fs };
+        let mut record = volume_record();
+        record["fs_type"] = json!(actual_fs);
+        record["format_policy"] = json!("legacy-managed");
+        let mut requested_cap = cap(Some(fs));
+        requested_cap.access_mode.as_mut().unwrap().mode = 5;
+        if let Some(csi::volume_capability::AccessType::Mount(mount)) =
+            &mut requested_cap.access_type
+        {
+            mount.mount_flags.push("prjquota".into());
+        }
+        fixture.reply(StatusCode::OK, record);
+        let result = fixture
+            .controller
+            .controller_expand_volume(Request::new(csi::ControllerExpandVolumeRequest {
+                volume_id: "opaque/legacy:handle".into(),
+                volume_capability: Some(requested_cap),
+                capacity_range: create().capacity_range,
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(result.capacity_bytes, 4096);
+        assert!(result.node_expansion_required);
+        let body = fixture.calls()[0].body.clone();
+        assert_eq!(
+            body["expected_shape"]["fs_type"],
+            if fs.is_empty() {
+                Value::Null
+            } else {
+                json!(fs)
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn invalid_volume_mutation_responses_retry_the_same_resource_without_compensation() {
+    let mut bad_capacity = volume_record();
+    bad_capacity["capacity_bytes"] = json!(1);
+    let mut bad_shape = volume_record();
+    bad_shape["fs_type"] = json!("ext4");
+    let mut bad_source = volume_record();
+    bad_source["source"] = json!({"type":"snapshot", "id":"wrong-source"});
+    for invalid in [json!("invalid-schema"), bad_capacity, bad_shape, bad_source] {
+        let fixture = Fixture::new().await;
+        fixture.reply(StatusCode::OK, invalid);
+        fixture.reply(StatusCode::OK, volume_record());
+        assert_eq!(
+            fixture
+                .controller
+                .create_volume(Request::new(create()))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::Unavailable
+        );
+        assert_eq!(fixture.calls().len(), 1); // no internal retry or speculative delete
+        fixture
+            .controller
+            .create_volume(Request::new(create()))
+            .await
+            .unwrap();
+        let calls = fixture.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].key, calls[1].key);
+        assert_eq!(calls[0].body, calls[1].body);
+        assert!(
+            calls
+                .iter()
+                .all(|call| call.path.ends_with("/volumes") && call.method == Method::POST)
+        );
+    }
+}
+
+#[tokio::test]
+async fn invalid_snapshot_and_attachment_responses_remain_reconcilable() {
+    let fixture = Fixture::new().await;
+    let mut invalid = snapshot_record();
+    invalid["creation_time_nanos"] = json!(1_000_000_000);
+    fixture.reply(StatusCode::OK, invalid);
+    fixture.reply(StatusCode::OK, snapshot_record());
+    let request = csi::CreateSnapshotRequest {
+        name: "same-snapshot".into(),
+        source_volume_id: "opaque/legacy:handle".into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        fixture
+            .controller
+            .create_snapshot(Request::new(request.clone()))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::Unavailable
+    );
+    fixture
+        .controller
+        .create_snapshot(Request::new(request))
+        .await
+        .unwrap();
+    let mut invalid = attachment_record();
+    invalid["node_id"] = json!("stale-incarnation");
+    fixture.reply(StatusCode::OK, invalid);
+    fixture.reply(StatusCode::OK, attachment_record());
+    assert_eq!(
+        fixture
+            .controller
+            .controller_publish_volume(Request::new(publish()))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::Unavailable
+    );
+    fixture
+        .controller
+        .controller_publish_volume(Request::new(publish()))
+        .await
+        .unwrap();
+    let calls = fixture.calls();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0].key, calls[1].key);
+    assert_eq!(calls[2].key, calls[3].key);
+}
+
+#[tokio::test]
+async fn invalid_expansion_identity_filesystem_or_capacity_does_not_end_reconciliation() {
+    let request = csi::ControllerExpandVolumeRequest {
+        volume_id: "opaque/legacy:handle".into(),
+        volume_capability: Some(cap(Some("xfs"))),
+        capacity_range: create().capacity_range,
+        ..Default::default()
+    };
+    for (field, value) in [
+        ("volume_id", json!("another-volume")),
+        ("fs_type", json!("ext4")),
+        ("capacity_bytes", json!(1)),
+    ] {
+        let fixture = Fixture::new().await;
+        let mut invalid = volume_record();
+        invalid[field] = value;
+        fixture.reply(StatusCode::OK, invalid);
+        fixture.reply(StatusCode::OK, volume_record());
+        assert_eq!(
+            fixture
+                .controller
+                .controller_expand_volume(Request::new(request.clone()))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::Unavailable
+        );
+        fixture
+            .controller
+            .controller_expand_volume(Request::new(request.clone()))
+            .await
+            .unwrap();
+        let calls = fixture.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].key, calls[1].key);
+        assert_eq!(calls[0].body, calls[1].body);
+        assert!(
+            calls
+                .iter()
+                .all(|call| call.path.ends_with("/volumes/expand"))
+        );
+    }
+}
+
+#[tokio::test]
+async fn response_limits_cover_content_length_and_chunked_mutation_bodies() {
+    for chunked in [false, true] {
+        let fixture = Fixture::new().await;
+        fixture.state.lock().unwrap().replies.push_back(Reply {
+            status: StatusCode::OK,
+            body: json!("x".repeat(1024 * 1024)),
+            delay: Duration::ZERO,
+            location: None,
+            chunked,
+        });
+        fixture.reply(StatusCode::OK, volume_record());
+        assert_eq!(
+            fixture
+                .controller
+                .create_volume(Request::new(create()))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::Unavailable
+        );
+        fixture
+            .controller
+            .create_volume(Request::new(create()))
+            .await
+            .unwrap();
+        assert_eq!(fixture.calls().len(), 2);
+        assert_eq!(fixture.calls()[0].key, fixture.calls()[1].key);
+    }
+}
+
+#[tokio::test]
+async fn redirect_is_rejected_without_forwarding_the_cluster_token() {
+    let destination = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let fixture = Fixture::new().await;
+    fixture.state.lock().unwrap().replies.push_back(Reply {
+        status: StatusCode::TEMPORARY_REDIRECT,
+        body: json!({}),
+        delay: Duration::ZERO,
+        location: Some(format!(
+            "http://{}/should-not-receive-token",
+            destination.local_addr().unwrap()
+        )),
+        chunked: false,
+    });
+    assert_eq!(
+        fixture
+            .controller
+            .create_volume(Request::new(create()))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::FailedPrecondition
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), destination.accept())
+            .await
+            .is_err()
+    );
+    assert_eq!(fixture.calls().len(), 1);
+}
+
+#[tokio::test]
+async fn attachment_deadline_includes_feature_preflight_and_mutation() {
+    let fixture = Fixture::new().await;
+    fixture
+        .state
+        .lock()
+        .unwrap()
+        .capability_replies
+        .push_back(Reply {
+            status: StatusCode::OK,
+            body: backend_capabilities(),
+            delay: Duration::from_millis(200),
+            location: None,
+            chunked: false,
+        });
+    fixture.state.lock().unwrap().replies.push_back(Reply {
+        status: StatusCode::OK,
+        body: attachment_record(),
+        delay: Duration::from_millis(200),
+        location: None,
+        chunked: false,
+    });
+    let mut request = Request::new(publish());
+    request.set_timeout(Duration::from_millis(250));
+    assert_eq!(
+        fixture
+            .controller
+            .controller_publish_volume(request)
+            .await
+            .unwrap_err()
+            .code(),
+        Code::DeadlineExceeded
+    );
+    assert_eq!(fixture.all_calls().len(), 2);
+}
+
+#[tokio::test]
+async fn readiness_rejects_wrong_version_format_and_transport_failures() {
+    let fixture = Fixture::new().await;
+    for (field, value) in [
+        ("api_version", "future-rest-version"),
+        ("format_policy", "blank"),
+    ] {
+        let mut caps = backend_capabilities();
+        caps[field] = json!(value);
+        fixture.capability_reply(StatusCode::OK, caps);
+        assert_eq!(
+            fixture.controller.ready().await.unwrap_err().code(),
+            Code::FailedPrecondition
+        );
+    }
+    fixture.capability_reply(
+        StatusCode::UNAUTHORIZED,
+        json!({"message":"secret-must-stay-hidden"}),
+    );
+    assert_eq!(
+        fixture.controller.ready().await.unwrap_err().code(),
+        Code::Unauthenticated
+    );
+    fixture.capability_reply(StatusCode::OK, json!(null));
+    assert_eq!(
+        fixture.controller.ready().await.unwrap_err().code(),
+        Code::DataLoss
+    );
+    for token in ["", "has inner spaces", "line\nbreak", &"x".repeat(65537)] {
+        std::fs::write(fixture.temp.path().join("token"), token).unwrap();
+        let before = fixture.all_calls().len();
+        assert_eq!(
+            fixture.controller.ready().await.unwrap_err().code(),
+            Code::Unauthenticated
+        );
+        assert_eq!(fixture.all_calls().len(), before);
+    }
+}
+
+#[tokio::test]
+async fn diagnostics_expose_operation_and_status_without_backend_or_request_secrets() {
+    use std::io::Write;
+    #[derive(Clone)]
+    struct Logs(Arc<Mutex<Vec<u8>>>);
+    impl Write for Logs {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let logs = Logs(Arc::new(Mutex::new(Vec::new())));
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .without_time()
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    // This integration-test binary has one diagnostic subscriber. A process
+    // default also observes HTTP work spawned on another executor thread.
+    tracing::subscriber::set_global_default(subscriber).unwrap();
+    async {
+        let fixture = Fixture::new().await;
+        fixture.reply(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({
+                "code":"backend-secret-code", "message":"backend-secret-message"
+            }),
+        );
+        let mut request = create();
+        request.name = "private-resource-name".into();
+        request
+            .parameters
+            .insert("pool".into(), "private-pool".into());
+        assert_eq!(
+            fixture
+                .controller
+                .create_volume(Request::new(request.clone()))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::Unavailable
+        );
+        fixture.reply(StatusCode::OK, json!({"bad":"backend-secret-json"}));
+        assert_eq!(
+            fixture
+                .controller
+                .create_volume(Request::new(request))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::Unavailable
+        );
+    }
+    .await;
+    let captured = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(captured.contains("volumes"));
+    assert!(captured.contains("500"));
+    assert!(captured.contains("Unavailable"));
+    assert!(captured.contains("invalid_mutation_response"));
+    for forbidden in [
+        "backend-secret",
+        "private-resource",
+        "private-pool",
+        "biscuit-first",
+        "Bearer",
+    ] {
+        assert!(
+            !captured.contains(forbidden),
+            "secret leaked into diagnostics"
+        );
     }
 }
 
@@ -347,7 +1001,7 @@ async fn attachment_rejects_invalid_serials_without_truncation_or_normalization(
             .controller_publish_volume(Request::new(publish()))
             .await
             .unwrap_err();
-        assert_eq!(error.code(), Code::DataLoss, "serial {serial:?}");
+        assert_eq!(error.code(), Code::Unavailable, "serial {serial:?}");
     }
     assert_eq!(fixture.calls().len(), serials.len());
 }
@@ -397,7 +1051,7 @@ async fn mismatched_filesystem_or_unformatted_attach_is_not_published() {
                 .await
                 .unwrap_err()
                 .code(),
-            Code::DataLoss
+            Code::Unavailable
         );
     }
 }
@@ -416,7 +1070,7 @@ async fn stale_attachment_response_for_another_incarnation_is_rejected() {
             .await
             .unwrap_err()
             .code(),
-        Code::DataLoss
+        Code::Unavailable
     );
 }
 
@@ -517,6 +1171,8 @@ async fn call_deadline_bounds_http_work_without_blind_retry() {
         status: StatusCode::OK,
         body: volume_record(),
         delay: Duration::from_secs(1),
+        location: None,
+        chunked: false,
     });
     let mut request = Request::new(create());
     request.set_timeout(Duration::from_millis(30));
@@ -692,9 +1348,9 @@ async fn invalid_snapshot_pages_and_tokens_fail_closed() {
 #[tokio::test]
 async fn readiness_requires_the_backend_contract_including_legacy_fencing_and_clone() {
     let fixture = Fixture::new().await;
-    fixture.reply(StatusCode::OK,json!({"api_version":"clever-csi-v1", "format_policy":"preformatted", "features":REQUIRED_FEATURES}));
+    fixture.capability_reply(StatusCode::OK, backend_capabilities());
     fixture.controller.ready().await.unwrap();
-    fixture.reply(
+    fixture.capability_reply(
         StatusCode::OK,
         json!({"api_version":"clever-csi-v1", "format_policy":"preformatted", "features":[]}),
     );
@@ -702,7 +1358,7 @@ async fn readiness_requires_the_backend_contract_including_legacy_fencing_and_cl
         fixture.controller.ready().await.unwrap_err().code(),
         Code::FailedPrecondition
     );
-    fixture.reply(StatusCode::NOT_FOUND, json!({}));
+    fixture.capability_reply(StatusCode::NOT_FOUND, json!({}));
     assert_eq!(
         fixture.controller.ready().await.unwrap_err().code(),
         Code::Unimplemented

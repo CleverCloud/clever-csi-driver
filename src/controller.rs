@@ -3,7 +3,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use reqwest::Method;
@@ -78,13 +78,12 @@ impl csi::controller_server::Controller for CsiController {
                 deadline,
             )
             .await?;
-        validate_record(&record)?;
+        validate_record(&record).map_err(|_| axo::invalid_mutation_response("volumes"))?;
         if record.shape != shape || record.source != source {
-            return Err(Status::data_loss(
-                "Axo returned incompatible volume metadata",
-            ));
+            return Err(axo::invalid_mutation_response("volumes"));
         }
-        validate_capacity(record.capacity_bytes, required_bytes, limit_bytes)?;
+        validate_capacity(record.capacity_bytes, required_bytes, limit_bytes)
+            .map_err(|_| axo::invalid_mutation_response("volumes"))?;
         Ok(Response::new(csi::CreateVolumeResponse {
             volume: Some(volume(record)),
         }))
@@ -110,6 +109,7 @@ impl csi::controller_server::Controller for CsiController {
         &self,
         request: Request<csi::ControllerPublishVolumeRequest>,
     ) -> Result<Response<csi::ControllerPublishVolumeResponse>, Status> {
+        let started = Instant::now();
         let deadline = deadline(&request)?;
         let request = request.into_inner();
         identifier(&request.volume_id, "volume_id")?;
@@ -118,21 +118,42 @@ impl csi::controller_server::Controller for CsiController {
             .volume_capability
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("volume_capability is required"))?;
-        let shape = capability(cap)?;
+        required_capability_fields(cap)?;
         if cap.access_mode.as_ref().is_some_and(|mode| {
-            mode.mode == csi::volume_capability::access_mode::Mode::SingleNodeReaderOnly as i32
+            matches!(mode.mode, 2 | 3) // SINGLE_NODE_READER_ONLY or MULTI_NODE_READER_ONLY
         }) && !request.readonly
         {
             return Err(Status::invalid_argument(
-                "SINGLE_NODE_READER_ONLY requires readonly attachment",
+                "reader-only access mode requires readonly attachment",
             ));
         }
-        let volume_context = storage_parameters(request.volume_context)?;
-        validate_parameter_filesystem(&volume_context, &shape)?;
+        // Historical ceph-csi nodes can support capabilities our QEMU Node
+        // service cannot. Only Axo knows the route: constrain the atomic backend
+        // operation instead of rejecting these volumes before classification.
+        let volume_context = storage_metadata(request.volume_context.clone())?;
+        let qemu_shape = capability(cap).and_then(|shape| {
+            storage_parameters(request.volume_context)?;
+            validate_parameter_filesystem(&volume_context, &shape)?;
+            Ok(shape)
+        });
+        let mut allowed_transports = vec![axo::AttachmentTransport::LegacyKrbd];
+        let shape = match qemu_shape {
+            Ok(shape) => {
+                allowed_transports.push(axo::AttachmentTransport::Qemu);
+                shape
+            }
+            Err(_) => existing_capability_shape(cap)?,
+        };
+        // Fail closed if an older backend could silently ignore the allowlist.
+        // Do not cache this across a backend deployment or a routing change.
+        self.axo
+            .ready_with_deadline(deadline.map(|limit| limit.saturating_sub(started.elapsed())))
+            .await?;
         let body = axo::EnsureAttachment {
             volume_id: request.volume_id,
             node_id: request.node_id,
             readonly: request.readonly,
+            allowed_transports,
             shape: shape.clone(),
             volume_context,
         };
@@ -143,7 +164,7 @@ impl csi::controller_server::Controller for CsiController {
                 "attachments",
                 &body,
                 Some(&[&body.volume_id, &body.node_id]),
-                deadline,
+                deadline.map(|limit| limit.saturating_sub(started.elapsed())),
             )
             .await?;
         let publish_context = match attachment {
@@ -156,15 +177,16 @@ impl csi::controller_server::Controller for CsiController {
                 shape: actual,
                 format_policy,
             } => {
-                if actual != shape
+                if !body
+                    .allowed_transports
+                    .contains(&axo::AttachmentTransport::Qemu)
+                    || actual != shape
                     || format_policy != "preformatted"
                     || readonly != body.readonly
                     || volume_id != body.volume_id
                     || node_id != body.node_id
                 {
-                    return Err(Status::data_loss(
-                        "Axo attachment does not match the requested volume capability",
-                    ));
+                    return Err(axo::invalid_mutation_response("attachments"));
                 }
                 if device_serial.is_empty()
                     || device_serial.len() > 36
@@ -172,7 +194,7 @@ impl csi::controller_server::Controller for CsiController {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
                 {
-                    return Err(Status::data_loss("Axo returned an invalid device serial"));
+                    return Err(axo::invalid_mutation_response("attachments"));
                 }
                 let mut context = shape_context(&shape);
                 context.insert("device_serial".into(), device_serial);
@@ -285,7 +307,7 @@ impl csi::controller_server::Controller for CsiController {
         let requested_shape = request
             .volume_capability
             .as_ref()
-            .map(capability)
+            .map(existing_capability_shape)
             .transpose()?;
         let (required_bytes, limit_bytes) = capacity(request.capacity_range.as_ref(), true)?;
         let body = axo::ExpandVolume {
@@ -308,17 +330,21 @@ impl csi::controller_server::Controller for CsiController {
                 deadline,
             )
             .await?;
-        validate_record(&record)?;
+        validate_existing_record(&record)
+            .map_err(|_| axo::invalid_mutation_response("volumes/expand"))?;
         if record.volume_id != body.volume_id
-            || requested_shape
-                .as_ref()
-                .is_some_and(|shape| shape != &record.shape)
+            || requested_shape.as_ref().is_some_and(|shape| {
+                shape.volume_mode != record.shape.volume_mode
+                    || shape
+                        .fs_type
+                        .as_ref()
+                        .is_some_and(|fs| Some(fs) != record.shape.fs_type.as_ref())
+            })
         {
-            return Err(Status::data_loss(
-                "Axo expansion changed volume identity or capability",
-            ));
+            return Err(axo::invalid_mutation_response("volumes/expand"));
         }
-        validate_capacity(record.capacity_bytes, required_bytes, limit_bytes)?;
+        validate_capacity(record.capacity_bytes, required_bytes, limit_bytes)
+            .map_err(|_| axo::invalid_mutation_response("volumes/expand"))?;
         Ok(Response::new(csi::ControllerExpandVolumeResponse {
             capacity_bytes: record.capacity_bytes,
             // Raw Block also needs the guest's SCSI rescan before its larger
@@ -351,12 +377,12 @@ impl csi::controller_server::Controller for CsiController {
             )
             .await?;
         if record.source_volume_id != body.source_volume_id {
-            return Err(Status::data_loss(
-                "Axo snapshot source differs from request",
-            ));
+            return Err(axo::invalid_mutation_response("snapshots"));
         }
         Ok(Response::new(csi::CreateSnapshotResponse {
-            snapshot: Some(snapshot(record)?),
+            snapshot: Some(
+                snapshot(record).map_err(|_| axo::invalid_mutation_response("snapshots"))?,
+            ),
         }))
     }
 
@@ -595,6 +621,25 @@ fn capability(cap: &csi::VolumeCapability) -> Result<axo::VolumeShape, Status> {
     }
 }
 
+/// Shape of an existing volume, without the restrictions of our QEMU Node
+/// implementation. Empty filesystem means unspecified, not an XFS conversion.
+fn existing_capability_shape(cap: &csi::VolumeCapability) -> Result<axo::VolumeShape, Status> {
+    use csi::volume_capability::AccessType;
+    required_capability_fields(cap)?;
+    Ok(
+        match cap.access_type.as_ref().expect("validated access type") {
+            AccessType::Block(_) => axo::VolumeShape {
+                volume_mode: axo::VolumeMode::Block,
+                fs_type: None,
+            },
+            AccessType::Mount(mount) => axo::VolumeShape {
+                volume_mode: axo::VolumeMode::Filesystem,
+                fs_type: (!mount.fs_type.is_empty()).then(|| mount.fs_type.clone()),
+            },
+        },
+    )
+}
+
 fn required_capability_fields(cap: &csi::VolumeCapability) -> Result<(), Status> {
     use csi::volume_capability::access_mode::Mode;
     if cap.access_type.is_none() {
@@ -738,15 +783,27 @@ fn shape_context(shape: &axo::VolumeShape) -> HashMap<String, String> {
 }
 
 fn validate_record(record: &axo::VolumeRecord) -> Result<(), Status> {
+    validate_existing_record(record)?;
+    if record.format_policy != "preformatted"
+        || record.shape.volume_mode == axo::VolumeMode::Filesystem
+            && !matches!(record.shape.fs_type.as_deref(), Some("xfs" | "ext4"))
+    {
+        return Err(Status::data_loss("invalid Axo volume metadata"));
+    }
+    Ok(())
+}
+
+fn validate_existing_record(record: &axo::VolumeRecord) -> Result<(), Status> {
     identifier(&record.volume_id, "Axo volume_id")
         .map_err(|_| Status::data_loss("invalid Axo volume identity"))?;
     if record.capacity_bytes <= 0
-        || record.format_policy != "preformatted"
         || match record.shape.volume_mode {
             axo::VolumeMode::Block => record.shape.fs_type.is_some(),
-            axo::VolumeMode::Filesystem => {
-                !matches!(record.shape.fs_type.as_deref(), Some("xfs" | "ext4"))
-            }
+            axo::VolumeMode::Filesystem => record
+                .shape
+                .fs_type
+                .as_ref()
+                .is_none_or(|fs| fs.is_empty() || fs.chars().any(char::is_control)),
         }
     {
         return Err(Status::data_loss("invalid Axo volume metadata"));
@@ -800,13 +857,7 @@ fn snapshot(record: axo::SnapshotRecord) -> Result<csi::Snapshot, Status> {
 /// Existing Ceph fields are routing hints only; Axo MUST compare them with the
 /// cluster's authoritative journal and storage policy. Never forward CSI secrets.
 fn storage_parameters(values: HashMap<String, String>) -> Result<BTreeMap<String, String>, Status> {
-    if values.len() > 128
-        || values
-            .iter()
-            .any(|(key, value)| key.len() > 256 || value.len() > 4096)
-    {
-        return Err(Status::invalid_argument("storage parameters exceed limits"));
-    }
+    let values = storage_metadata(values)?;
     for (key, value) in &values {
         match key.as_str() {
             "encrypted" if value != "false" => {
@@ -822,6 +873,22 @@ fn storage_parameters(values: HashMap<String, String>) -> Result<BTreeMap<String
             "mounter" if value != "rbd" => {
                 return Err(Status::invalid_argument("only RBD volumes are supported"));
             }
+            _ => {}
+        }
+    }
+    Ok(values)
+}
+
+fn storage_metadata(values: HashMap<String, String>) -> Result<BTreeMap<String, String>, Status> {
+    if values.len() > 128
+        || values
+            .iter()
+            .any(|(key, value)| key.len() > 256 || value.len() > 4096)
+    {
+        return Err(Status::invalid_argument("storage parameters exceed limits"));
+    }
+    for key in values.keys() {
+        match key.as_str() {
             // Secret references are compatible metadata; secret values are never accepted.
             "userKey" | "adminKey" | "key" | "token" | "password" => {
                 return Err(Status::invalid_argument(

@@ -2,9 +2,8 @@
 
 **Status: proposed resource API, revision `2026-10-13`. Neither the current
 driver client nor Axo implements this revision.** The driver currently uses
-the earlier action API, `clever-csi-v1`; its HTTP contract tests validate that
-earlier interface. The [previous contract at commit 339e7f0](https://github.com/CleverCloud/clever-csi-driver/blob/339e7f0/docs/axo-api.md)
-records the implemented client behavior. Updating this document does not change
+the earlier action API, [clever-csi-v1](axo-api-v1.md); its HTTP contract tests
+validate that earlier interface, restored from implementation baseline `339e7f0`. Updating this document does not change
 the driver, deploy an API or enable a migration.
 
 [axo-openapi.yaml](axo-openapi.yaml) defines the proposed routes, JSON schemas,

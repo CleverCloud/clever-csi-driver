@@ -1,4 +1,5 @@
-//! Client for the proposed, cluster-scoped Axo CSI API documented in docs/axo-api.md.
+//! Client for the historical, cluster-scoped wire API in docs/axo-api-v1.md.
+//! This is not the future REST proposal in docs/axo-api.md.
 //! The API is not present in the existing Axo repository. No Ceph or hypervisor
 //! credential, journal interpretation, lock breaking, or fencing belongs here.
 
@@ -26,6 +27,7 @@ pub const REQUIRED_FEATURES: &[&str] = &[
     "snapshot.list",
     "legacy-pool-routing",
     "attachment.readonly",
+    "attachment.allowed-transports",
 ];
 
 #[derive(Clone)]
@@ -109,9 +111,19 @@ pub struct EnsureAttachment {
     /// it must never be resolved into a QEMU attachment target.
     pub node_id: String,
     pub readonly: bool,
+    /// Axo must classify the target authoritatively and enforce this allowlist
+    /// atomically before any attachment side effect. Never infer from node_id.
+    pub allowed_transports: Vec<AttachmentTransport>,
     #[serde(flatten)]
     pub shape: VolumeShape,
     pub volume_context: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum AttachmentTransport {
+    LegacyKrbd,
+    Qemu,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -253,8 +265,12 @@ impl AxoClient {
     }
 
     pub async fn ready(&self) -> Result<(), Status> {
+        self.ready_with_deadline(None).await
+    }
+
+    pub async fn ready_with_deadline(&self, deadline: Option<Duration>) -> Result<(), Status> {
         let caps: Capabilities = self
-            .json(Method::GET, "capabilities", &(), None, None)
+            .json(Method::GET, "capabilities", &(), None, deadline)
             .await?;
         if caps.api_version != API_VERSION
             || caps.format_policy != "preformatted"
@@ -262,6 +278,11 @@ impl AxoClient {
                 .iter()
                 .any(|feature| !caps.features.iter().any(|f| f == feature))
         {
+            tracing::warn!(
+                operation = "capabilities",
+                reason = "incompatible_contract",
+                "Axo readiness failed"
+            );
             return Err(Status::failed_precondition(
                 "Axo does not implement the required CSI contract",
             ));
@@ -280,7 +301,7 @@ impl AxoClient {
         deadline: Option<Duration>,
     ) -> Result<R, Status> {
         let bytes = self.send(method, path, body, identity, deadline).await?;
-        serde_json::from_slice(&bytes).map_err(|_| Status::data_loss("invalid response from Axo"))
+        serde_json::from_slice(&bytes).map_err(|_| response_error(path, identity.is_some()))
     }
 
     pub async fn delete<B: Serialize + ?Sized>(
@@ -312,7 +333,7 @@ impl AxoClient {
         if timeout.is_zero() {
             return Err(Status::deadline_exceeded("CSI request deadline expired"));
         }
-        tokio::time::timeout(timeout, async {
+        let result = tokio::time::timeout(timeout, async {
             // Read on every request: rotating an atomically replaced token file
             // does not require restarting the controller. Never display its contents.
             let metadata = tokio::fs::metadata(&self.token_file)
@@ -360,16 +381,23 @@ impl AxoClient {
                 .content_length()
                 .is_some_and(|size| size > MAX_RESPONSE_BYTES as u64)
             {
-                return Err(Status::data_loss("Axo response exceeds limit"));
+                return Err(response_error(path, identity.is_some()));
             }
             let mut bytes = Vec::new();
             while let Some(chunk) = response.chunk().await.map_err(http_error)? {
                 if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
-                    return Err(Status::data_loss("Axo response exceeds limit"));
+                    return Err(response_error(path, identity.is_some()));
                 }
                 bytes.extend_from_slice(&chunk);
             }
             if !status.is_success() {
+                // Never log backend bodies, arbitrary error codes, request
+                // metadata, handles, URLs or authorization headers.
+                tracing::warn!(
+                    operation = safe_operation(path),
+                    http_status = status.as_u16(),
+                    "Axo HTTP operation failed"
+                );
                 return Err(api_error(status, &bytes));
             }
             // Asynchronous acceptance is not success: CSI must not report an
@@ -380,8 +408,47 @@ impl AxoClient {
             Ok(bytes)
         })
         .await
-        .map_err(|_| Status::deadline_exceeded("Axo request deadline exceeded"))?
+        .unwrap_or_else(|_| Err(Status::deadline_exceeded("Axo request deadline exceeded")));
+        if let Err(error) = &result {
+            tracing::warn!(operation = safe_operation(path), grpc_code = ?error.code(), mutation = identity.is_some(), "Axo request failed");
+        }
+        result
     }
+}
+
+fn safe_operation(path: &str) -> &str {
+    match path {
+        "capabilities" | "volumes" | "volumes/resolve" | "volumes/delete" | "volumes/expand"
+        | "attachments" | "attachments/delete" | "snapshots" | "snapshots/delete"
+        | "snapshots/list" => path,
+        _ => "unknown",
+    }
+}
+
+fn response_error(operation: &str, mutation: bool) -> Status {
+    if mutation {
+        invalid_mutation_response(operation)
+    } else {
+        tracing::warn!(
+            operation = safe_operation(operation),
+            reason = "invalid_response",
+            "Invalid Axo response"
+        );
+        Status::data_loss("invalid response from Axo")
+    }
+}
+
+/// An unusable successful mutation response does not prove the operation failed.
+/// Keep the CSI operation retryable with its original identity; do not compensate
+/// with deletion or report a final provisioning failure that could orphan data.
+pub(crate) fn invalid_mutation_response(operation: &str) -> Status {
+    tracing::warn!(
+        operation = safe_operation(operation),
+        reason = "invalid_mutation_response",
+        outcome = "unknown",
+        "Axo mutation requires reconciliation"
+    );
+    Status::unavailable("Axo mutation response is invalid; retry to reconcile its outcome")
 }
 
 fn idempotency_key(scope: &str, operation: &str, identity: &[&str]) -> String {
