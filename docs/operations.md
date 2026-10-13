@@ -20,8 +20,8 @@ bash deploy/test_linux.sh
 ```
 
 The multi-stage image compiles with Rust 1.90 on Debian Bookworm and includes
-`mount`, `umount`, `blkid`, XFS and ext4 resize tools in its runtime. The node
-service runs privileged; the controller runs as UID/GID 65532 with a read-only
+`mount`, `umount`, `blkid`, `blockdev`, XFS and ext4 resize tools in its runtime.
+The node service runs privileged; the controller runs as UID/GID 65532 with a read-only
 root filesystem. The node mounts `/sys` writable solely to rescan the verified
 SCSI device during expansion. Device identity is validated before that sysfs
 write. The node never needs Ceph clients or Ceph credentials. It
@@ -29,8 +29,11 @@ refuses to format unknown disks: Axo must supply a preformatted XFS/ext4 image
 for Filesystem volumes, while raw Block volumes are never formatted.
 
 GitHub Actions runs formatting, Clippy, Rust tests, Helm lint and deployment
-contract tests, checks the deterministic bundles, runs the real Linux storage tests in a disposable privileged Docker container,
-then builds `linux/amd64` and smoke-tests the real runtime before publication.
+contract tests, checks the deterministic bundles, runs the real Linux storage
+tests in a disposable privileged Docker container, then builds `linux/amd64`
+and smoke-tests the real runtime before publication.
+The tested image is transferred to the publication job as an artifact, checked
+against its recorded image identity and published without a second build.
 The Linux test source is read-only and its scratch/target directories are private
 Docker volumes. It creates only new file-backed loop devices for XFS/ext4/raw
 Block tests; the test runner cleans its container and temporary volumes.
@@ -38,8 +41,40 @@ Pushes to `main` and `v*` tags publish
 `ghcr.io/clevercloud/clever-csi-driver` using `GITHUB_TOKEN` with `packages: write`.
 Pull requests build without registry login or publication. A `v0.1.0` release
 produces both `:v0.1.0` and `:0.1.0`; main publishes `:main`, plus a commit tag.
+No automatic `latest` tag is generated. Runs on the same release reference are
+serialized; automatic cancellation is limited to pull requests, so another push
+does not interrupt an active publication.
 The repository must have permission to create/write this package in the
 CleverCloud organization. This implementation does not push a release itself.
+
+## Mount and recovery policy
+
+Filesystem mounts always include `nosuid,nodev`; raw Block binds include
+`nosuid` without `nodev`. `noexec` is applied only when requested. Mount options
+that weaken these defaults, including `suid` and `dev`, are rejected. Workloads
+that depend on setuid executables or device files within a filesystem volume
+must be reviewed before moving from the legacy plugin. Retaining a volume's
+data and handle does not imply identical mount options to the legacy deployment.
+
+For filesystems, effective read-only access combines the attachment, volume
+capability, mount options and individual publication request. A false
+`NodePublishVolume.readonly` value never overrides an existing read-only
+constraint. Read-only Block publication additionally requires an attachment
+marked read-only by Axo and a guest block device reporting read-only. A request
+for a read-only Block publication on a writable attachment is rejected: a bind
+mount flag alone does not prevent device writes. The plugin does not set the
+whole device read-only as a side effect of one pod's request.
+
+The serial is the stable disk identity. After device re-enumeration, the plugin
+can update its persisted path and device number only after checking that the
+old staging and published mounts are gone and the new device has no conflicting
+mounts. Conflicting identities and mounted devices still cause refusal. Raw
+Block checks inspect the block inode's device number as well as mountinfo.
+Do not delete the state registry to bypass an ownership failure.
+
+Unpublish removes the driver's target file or empty directory after unmounting
+and verifying ownership. It does not recursively remove data or unrelated
+targets. The staging directory remains owned by kubelet after Unstage.
 
 ## Inputs owned by the platform
 
