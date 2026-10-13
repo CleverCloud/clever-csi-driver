@@ -36,9 +36,13 @@ def normalize(value):
 
 def bundle(phase, **settings):
     docs = render(phase, **settings)
+    for doc in docs:
+        if doc.get("kind") not in ORDER:
+            kind = doc.get("kind", "<missing kind>")
+            name = doc.get("metadata", {}).get("name", "<missing name>")
+            raise ValueError(f"unsupported plugin-owned resource {kind}/{name}; shared resources must remain externally managed")
     result = {}
     for index, doc in enumerate(sorted(docs, key=lambda d: (ORDER[d["kind"]], d["metadata"]["name"])), 1):
-        assert doc["kind"] in ORDER, "shared object must not become plugin-owned"
         normalize(doc)
         # The Axo renderer supplies app.kubernetes.io/managed-by and plugin labels.
         name = f'{index:02d}-{doc["kind"].lower()}-{doc["metadata"]["name"]}.yaml'

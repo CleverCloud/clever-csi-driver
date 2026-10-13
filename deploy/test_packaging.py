@@ -2,10 +2,17 @@
 """Validate deployment boundaries that protect a cluster during CSI takeover."""
 import subprocess
 import unittest
+from unittest.mock import patch
 from render import ROOT, bundle, render
 
 
 class DeploymentContract(unittest.TestCase):
+    def test_bundles_reject_shared_or_unknown_resources_before_sorting(self):
+        for kind in ["Secret", "StorageClass", "CSIDriver", "Namespace", "CustomResourceDefinition", "UnexpectedKind"]:
+            with self.subTest(kind=kind), patch("render.render", return_value=[{"kind": kind, "metadata": {"name": "shared"}}]):
+                with self.assertRaisesRegex(ValueError, f"unsupported plugin-owned resource {kind}/shared"):
+                    bundle("stage")
+
     def test_stage_cannot_take_over_legacy_controller_or_shared_objects(self):
         docs = render("stage")
         self.assertEqual({d["kind"] for d in docs}, {"ServiceAccount", "DaemonSet"})

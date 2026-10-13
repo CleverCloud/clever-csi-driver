@@ -29,7 +29,7 @@ def smoke(image):
         result = docker("run", "--rm", "--network=none", image, *arguments, check=False)
         assert result.returncode != 0, f"invalid settings accepted: {arguments}"
     docker("run", "--rm", "--network=none", "--entrypoint", "sh", image, "-c",
-           'for tool in mount umount blkid xfs_growfs resize2fs; do command -v "$tool" || exit 1; done')
+           'for tool in mount umount blkid blockdev xfs_growfs resize2fs; do command -v "$tool" || exit 1; done')
     for mode in ["node", "controller"]:
         with tempfile.TemporaryDirectory() as directory:
             token = Path(directory) / "token"
