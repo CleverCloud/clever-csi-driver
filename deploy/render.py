@@ -11,7 +11,7 @@ ORDER = {"ServiceAccount": 10, "ClusterRole": 20, "ClusterRoleBinding": 21,
          "Role": 22, "RoleBinding": 23, "Deployment": 30, "DaemonSet": 40}
 
 
-def render(phase, cluster_id="${OVD_CLUSTER_ID}", organisation_id="${OVD_CSI_ORGANISATION_ID}", axo_url=None, image_tag=None, image_digest=None):
+def render(phase, cluster_id="${OVD_CLUSTER_ID}", organisation_id="${OVD_CSI_ORGANISATION_ID}", axo_url=None, image_tag=None, image_digest=None, values_files=()):
     command = ["helm", "template", "clever-csi", str(ROOT / "charts/clever-csi-driver"),
                "--namespace", "kube-system"]
     if image_tag is not None:
@@ -24,6 +24,10 @@ def render(phase, cluster_id="${OVD_CLUSTER_ID}", organisation_id="${OVD_CSI_ORG
                     "--set-string", f"controller.organisationId={organisation_id}"]
         if axo_url is not None:
             command += ["--set-string", f"controller.axoUrl={axo_url}"]
+    # Phase defaults come first. Cluster values may override them; explicit
+    # --set-string options retain Helm's highest precedence regardless of order.
+    for values_file in values_files:
+        command += ["--values", str(values_file)]
     return [doc for doc in yaml.safe_load_all(subprocess.check_output(command, text=True)) if doc]
 
 
@@ -65,10 +69,14 @@ def main():
     parser.add_argument("--axo-url", help="Override controller.axoUrl from chart values")
     parser.add_argument("--image-tag", help="Override image.tag from chart values")
     parser.add_argument("--image-digest", help="Pin an image digest; takes precedence over image.tag")
+    parser.add_argument("--values", "-f", dest="values_files", type=Path, action="append", default=[],
+                        help="Cluster values override phase defaults; repeat in precedence order")
+    parser.add_argument("--phase", action="append", choices=["stage", "attach", "final"],
+                        help="Render only this phase; repeat to select multiple phases (default: all)")
     args = parser.parse_args()
-    settings = {k: getattr(args, k) for k in ["cluster_id", "organisation_id", "axo_url", "image_tag", "image_digest"]}
+    settings = {k: getattr(args, k) for k in ["cluster_id", "organisation_id", "axo_url", "image_tag", "image_digest", "values_files"]}
     failed = False
-    for phase in ["stage", "attach", "final"]:
+    for phase in args.phase or ["stage", "attach", "final"]:
         expected = bundle(phase, **settings)
         destination = args.output / phase
         actual_names = {p.name for p in destination.iterdir()} if destination.exists() else set()

@@ -12,6 +12,10 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 {{ printf "%s:%s" .Values.image.repository .Values.image.tag }}
 {{- end -}}
 {{- end -}}
+{{- define "csi.sidecarResources" -}}
+{{- $override := index .root.Values.sidecarResourcesByRole .role | default dict -}}
+{{- mergeOverwrite (deepCopy .root.Values.sidecarResources) $override | toJson -}}
+{{- end -}}
 {{- define "csi.probes" -}}
 ports:
   - {name: health, containerPort: 9808}

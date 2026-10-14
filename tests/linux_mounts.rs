@@ -291,6 +291,7 @@ fn capability(fs_type: Option<&str>) -> csi::VolumeCapability {
 
 fn context(serial: &str, fs_type: Option<&str>) -> HashMap<String, String> {
     let mut context = HashMap::from([
+        ("node_id".into(), "vm-linux-integration-test".into()),
         ("device_serial".into(), serial.into()),
         ("format_policy".into(), "preformatted".into()),
         (
@@ -340,6 +341,36 @@ async fn lifecycle(root: &Path, fs_type: Option<&str>) {
         None => (),
         _ => unreachable!(),
     }
+    // A clone/restore may have a larger block device but retain its source's
+    // smaller filesystem. Prepare real data in that filesystem before growing
+    // only the backing device; the first NodeStage must finish filesystem growth.
+    let restored_source = fs_type.map(|fs_type| {
+        let source_mount = root.join("source-before-restore");
+        std::fs::create_dir(&source_mount).unwrap();
+        disk.targets.push(source_mount.clone());
+        run(
+            "mount",
+            &[
+                "-t".as_ref(),
+                fs_type.as_ref(),
+                disk.device.as_os_str(),
+                source_mount.as_os_str(),
+            ],
+        );
+        let source_payload = source_mount.join("restored-payload");
+        let mut writer = File::create(&source_payload).unwrap();
+        let payload: Vec<u8> = (0..MIB).map(|index| (index % 239) as u8).collect();
+        writer.write_all(&payload).unwrap();
+        writer.sync_all().unwrap();
+        drop(writer);
+        let source_digest = digest(&source_payload);
+        assert_eq!(source_digest, Sha256::digest(&payload).to_vec());
+        let stat = nix::sys::statvfs::statvfs(&source_mount).unwrap();
+        let source_capacity = stat.blocks() * stat.fragment_size();
+        run("umount", &[source_mount.as_os_str()]);
+        disk.grow(initial + 64 * MIB);
+        (source_capacity, source_digest)
+    });
     let config = NodeConfig {
         node_id: "vm-linux-integration-test".into(),
         state_dir: root.join("state"),
@@ -398,10 +429,35 @@ async fn lifecycle(root: &Path, fs_type: Option<&str>) {
         .node_stage_volume(Request::new(stage_request.clone()))
         .await
         .unwrap();
+    if let Some((source_capacity, source_digest)) = &restored_source {
+        let stat = nix::sys::statvfs::statvfs(&stage).unwrap();
+        let staged_capacity = stat.blocks() * stat.fragment_size();
+        assert!(
+            staged_capacity > *source_capacity + 32 * MIB,
+            "first stage must grow the restored {name} filesystem before any NodeExpand"
+        );
+        assert_eq!(digest(&stage.join("restored-payload")), *source_digest);
+    }
     service
         .node_publish_volume(Request::new(publish_request.clone()))
         .await
         .unwrap();
+    if let Some((source_capacity, source_digest)) = &restored_source {
+        let stats = service
+            .node_get_volume_stats(Request::new(csi::NodeGetVolumeStatsRequest {
+                volume_id: name.into(),
+                volume_path: target.to_string_lossy().into(),
+                staging_target_path: stage.to_string_lossy().into(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(stats.usage[0].total > (*source_capacity + 32 * MIB) as i64);
+        assert_eq!(digest(&target.join("restored-payload")), *source_digest);
+        eprintln!(
+            "{name}: restored filesystem grew at first stage/publish with payload intact and no NodeExpand"
+        );
+    }
     if fs_type.is_none() {
         let mut unsafe_readonly = publish_request.clone();
         unsafe_readonly.readonly = true;

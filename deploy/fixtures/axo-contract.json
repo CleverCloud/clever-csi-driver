@@ -1635,7 +1635,11 @@
       "readonly": false,
       "volumeMode": "FILESYSTEM",
       "fsType": "XFS",
-      "volumeContext": {}
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
     },
     "valid": true
   },
@@ -1648,7 +1652,11 @@
       "volumeMode": "FILESYSTEM",
       "fsType": "XFS",
       "volumeContext": {},
-      "unknown": 1
+      "unknown": 1,
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
     },
     "valid": false
   },
@@ -1660,7 +1668,11 @@
       "readonly": 0,
       "volumeMode": "FILESYSTEM",
       "fsType": "XFS",
-      "volumeContext": {}
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
     },
     "valid": false
   },
@@ -1672,7 +1684,11 @@
       "readonly": false,
       "volumeMode": "FILESYSTEM",
       "fsType": null,
-      "volumeContext": {}
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
     },
     "valid": false
   },
@@ -1684,7 +1700,11 @@
       "readonly": false,
       "volumeMode": "BLOCK",
       "fsType": "XFS",
-      "volumeContext": {}
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
     },
     "valid": false
   },
@@ -1695,7 +1715,11 @@
       "readonly": false,
       "volumeMode": "FILESYSTEM",
       "fsType": "XFS",
-      "volumeContext": {}
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
     },
     "valid": false
   },
@@ -1706,7 +1730,11 @@
       "nodeId": "vm-1",
       "volumeMode": "FILESYSTEM",
       "fsType": "XFS",
-      "volumeContext": {}
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
     },
     "valid": false
   },
@@ -1717,7 +1745,11 @@
       "nodeId": "vm-1",
       "readonly": false,
       "fsType": "XFS",
-      "volumeContext": {}
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
     },
     "valid": false
   },
@@ -1728,7 +1760,11 @@
       "nodeId": "vm-1",
       "readonly": false,
       "volumeMode": "FILESYSTEM",
-      "volumeContext": {}
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
     },
     "valid": false
   },
@@ -1739,7 +1775,11 @@
       "nodeId": "vm-1",
       "readonly": false,
       "volumeMode": "FILESYSTEM",
-      "fsType": "XFS"
+      "fsType": "XFS",
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
     },
     "valid": false
   },
@@ -2191,6 +2231,304 @@
       "nodeId": null,
       "detachedNodeIds": [],
       "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "attachment allowlist empty",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {},
+      "allowedTransports": []
+    },
+    "valid": false
+  },
+  {
+    "label": "attachment allowlist duplicate",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {},
+      "allowedTransports": [
+        "QEMU",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "attachment allowlist unknown",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {},
+      "allowedTransports": [
+        "UNKNOWN"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "attachment allowlist missing",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {}
+    },
+    "valid": false
+  },
+  {
+    "label": "legacy-only attachment preserves BTRFS",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "volumeContext": {
+        "encrypted": "true",
+        "mounter": "rbd-nbd"
+      },
+      "allowedTransports": [
+        "LEGACY_KRBD"
+      ]
+    },
+    "valid": true
+  },
+  {
+    "label": "legacy-only attachment preserves None",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": null,
+      "volumeContext": {
+        "encrypted": "true",
+        "mounter": "rbd-nbd"
+      },
+      "allowedTransports": [
+        "LEGACY_KRBD"
+      ]
+    },
+    "valid": true
+  },
+  {
+    "label": "QEMU allowlist rejects legacy filesystem",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "legacy attachment preserves existing shape and initialization",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "LEGACY_KRBD",
+      "device": null,
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "formatPolicy": "LEGACY_MANAGED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": true
+  },
+  {
+    "label": "QEMU attachment rejects legacy filesystem",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "QEMU attachment rejects legacy initialization",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "LEGACY_MANAGED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "legacy volume observation preserves existing policy",
+    "schema": "KubernetesVolume",
+    "value": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "clusterId": "kubernetes_cluster",
+      "name": null,
+      "status": "AVAILABLE",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "capacityBytes": 1024,
+      "formatPolicy": "LEGACY_MANAGED",
+      "source": null,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "provenance": "LEGACY",
+      "adopted": false
+    },
+    "valid": true
+  },
+  {
+    "label": "adopted volume requires QEMU policy",
+    "schema": "KubernetesVolume",
+    "value": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "clusterId": "kubernetes_cluster",
+      "name": null,
+      "status": "AVAILABLE",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "capacityBytes": 1024,
+      "formatPolicy": "LEGACY_MANAGED",
+      "source": null,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "provenance": "LEGACY",
+      "adopted": true
+    },
+    "valid": false
+  },
+  {
+    "label": "native volume rejects legacy filesystem",
+    "schema": "KubernetesReadyVolume",
+    "value": {
+      "id": "volume-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "volume-name",
+      "status": "AVAILABLE",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "capacityBytes": 1024,
+      "formatPolicy": "PREFORMATTED",
+      "source": null,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "provenance": "NATIVE",
+      "adopted": true
+    },
+    "valid": false
+  },
+  {
+    "label": "legacy expansion expected filesystem BTRFS",
+    "schema": "KubernetesVolumeExpand",
+    "value": {
+      "requiredBytes": 8192,
+      "expectedShape": {
+        "volumeMode": "FILESYSTEM",
+        "fsType": "BTRFS"
+      }
+    },
+    "valid": true
+  },
+  {
+    "label": "legacy expansion expected filesystem None",
+    "schema": "KubernetesVolumeExpand",
+    "value": {
+      "requiredBytes": 8192,
+      "expectedShape": {
+        "volumeMode": "FILESYSTEM",
+        "fsType": null
+      }
+    },
+    "valid": true
+  },
+  {
+    "label": "block expansion rejects filesystem",
+    "schema": "KubernetesVolumeExpand",
+    "value": {
+      "requiredBytes": 8192,
+      "expectedShape": {
+        "volumeMode": "BLOCK",
+        "fsType": "XFS"
+      }
+    },
+    "valid": false
+  },
+  {
+    "label": "capabilities include mandatory transport guard",
+    "schema": "KubernetesCsiFeatures",
+    "value": {
+      "core": [
+        "VOLUME_ENSURE",
+        "VOLUME_RESOLVE",
+        "VOLUME_DELETE",
+        "ATTACHMENT_ENSURE",
+        "ATTACHMENT_DELETE",
+        "ATTACHMENT_READONLY",
+        "ATTACHMENT_ALLOWED_TRANSPORTS"
+      ],
+      "optional": [
+        "LEGACY_POOL_ROUTING"
+      ]
+    },
+    "valid": true
+  },
+  {
+    "label": "capabilities missing mandatory transport guard",
+    "schema": "KubernetesCsiFeatures",
+    "value": {
+      "core": [
+        "VOLUME_ENSURE",
+        "VOLUME_RESOLVE",
+        "VOLUME_DELETE",
+        "ATTACHMENT_ENSURE",
+        "ATTACHMENT_DELETE",
+        "ATTACHMENT_READONLY"
+      ],
+      "optional": [
+        "LEGACY_POOL_ROUTING"
+      ]
     },
     "valid": false
   }

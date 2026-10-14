@@ -41,6 +41,8 @@ node:
   idFile: /etc/clever-csi/node-id
   stateDirectory: /var/lib/clever-csi
   kubeletDirectory: /var/lib/kubelet
+  # Immutable once this pool hosts node plugins; changing eligibility can delete
+  # live DaemonSet pods even with OnDelete. See docs/operations.md.
   poolLabel: clever-cloud.com/csi
   poolValue: supernova
   resources:
@@ -53,5 +55,11 @@ sidecarImages:
   resizer: registry.k8s.io/sig-storage/csi-resizer:v1.14.0
   snapshotter: registry.k8s.io/sig-storage/csi-snapshotter:v8.4.0
 sidecarResources:
-  requests: {cpu: 10m, memory: 32Mi}
-  limits: {memory: 128Mi}
+  # Per container, not shared by the pod. A starting point, not a capacity guarantee:
+  # controller sidecar informer caches grow with the cluster's object count.
+  requests: {cpu: 10m, memory: 128Mi}
+  limits: {memory: 512Mi}
+# Optional partial overrides, merged over sidecarResources for each named role.
+# Valid roles: registrar, attacher, provisioner, resizer, snapshotter.
+# Keep defaults empty so existing common overrides still apply to every role.
+sidecarResourcesByRole: {}

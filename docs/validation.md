@@ -7,6 +7,44 @@ transport feature. The
 [client migration](axo-api.md#client-migration) and an Axo implementation;
 the existing controller tests do not exercise that proposal.
 
+## Review follow-up on 2026-10-14
+
+The review corrections were checked locally, without applying a cluster change:
+
+- Rust formatting and Clippy with warnings denied passed. The full ordinary
+  test run passed **106 tests**: 63 library, 42 controller contract and one gRPC
+  transport test. New cases cover exact VM incarnation before discovery,
+  legacy reader-only routing, mount-option changes, stale publication intent,
+  filesystem growth and retry after interrupted growth.
+- `bash deploy/test_linux.sh` passed all nine Linux scenarios. XFS and ext4 now
+  also start with a filesystem smaller than its device, containing a known
+  payload. Stage/Publish grew the filesystem and preserved its SHA256 before
+  any NodeExpand call. The suite still exercises normal expansion and recovery.
+- `bash deploy/test_linux.sh sanity` passed **72 specs**, with zero failures,
+  30 capability/option skips and one upstream pending spec. Its initial run
+  caught an error-code regression for missing incarnation context; that was
+  corrected and the complete suite rerun successfully without filtering tests.
+- Four Python fault-injection tests passed using
+  `python3 -m unittest discover -s deploy/sanity -p 'test_*.py'`. They verify
+  attached-device reconciliation after backing growth, observed capacity,
+  capacity limits before side effects and preservation of existing contents.
+- Helm lint, **11 packaging tests** and deterministic bundle comparison passed.
+  These cover independent per-role resource overrides and cluster-specific
+  renderer values. They do not enforce scheduling/admission policy in a cluster.
+- Both OpenAPI documents validated; the REST proposal passed **187/187 schema
+  fixtures**, covering guarded transport selection and legacy shape exceptions.
+  These document checks do not implement or validate a real Axo backend.
+- The final Docker image was rebuilt and passed `deploy/test_image.py`, including
+  CLI validation, filesystem tools, read-only root filesystems and health/readiness
+  checks in both roles.
+
+The Linux runners removed their owned loops, containers and scratch/target
+volumes, including after the failed initial conformance run. No test containers
+or temporary volumes remained. Real Axo/Supernova/QEMU/Ceph ownership, retirement,
+fencing and migration admission remain platform integration requirements. The
+dated 2026-10-13 results below are historical; their cluster checks were not
+repeated for this follow-up.
+
 ## Proposed REST contract
 
 Run `python3 -m pip install -r deploy/requirements.txt` followed by

@@ -8,6 +8,8 @@ info:
     the existing Axo repository. See axo-api-v1.md for mandatory
     ownership, durable idempotency, fencing, adoption and formatting semantics.
     HTTP 202 is not completion. Success must represent verified postconditions.
+    Invalid mutation success bodies map to retryable UNAVAILABLE with the same
+    reconciliation identity; malformed read responses map to DATA_LOSS.
 servers:
   - url: https://axo.example.invalid/v4/kubernetes/organisations/{organisation_id}/clusters/{cluster_id}/csi
     variables:
@@ -31,6 +33,13 @@ paths:
     post:
       operationId: ensureCsiVolume
       summary: Ensure volume, clone or restore by stable CSI name
+      description: >-
+        Preserve source data and filesystem. Writable NodeStage grows the
+        existing filesystem to guest device capacity before success. Before
+        read-only clone/restore attachment eligibility, Axo must grow and verify
+        the filesystem to the requested capacity under exclusive maintenance
+        ownership; image growth alone is insufficient. Never reformat a source
+        or adopted image to satisfy a growth request.
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody:
         required: true
@@ -80,6 +89,11 @@ paths:
     post:
       operationId: expandCsiVolume
       summary: Ensure increasing image and QEMU capacity after validating expected shape
+      description: >-
+        Reconcile both image capacity and every applicable QEMU block device on
+        every retry. An RBD image already satisfying the range is not success
+        after a failed block_resize. Observe QEMU capacity and persist completion
+        before returning success; never shrink or return a cached incomplete result.
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody:
         required: true
@@ -108,14 +122,23 @@ paths:
       operationId: ensureCsiAttachment
       summary: Reconcile fenced QEMU attachment or verified legacy pool no-op
       description: >-
-        The legacy response is valid only for a node authoritatively classified
-        as legacy. Historical node names must never be resolved into QEMU targets.
+        The legacy response requires both an authoritative legacy node and an
+        unadopted legacy image, with no live QEMU owner, pending attachment/adoption
+        intent or fence forbidding legacy access. Native/adopted images never
+        qualify. Historical node names must never be resolved into QEMU targets.
         New QEMU targets must identify an exact VM incarnation. Success requires
         completed fencing and observed attachment, not an enqueued instruction.
         The driver requires attachment.allowed-transports on GET capabilities
         before every attachment request. Classify the transport authoritatively
         and enforce allowed_transports atomically before any side effect; return
         412 if the real transport is excluded. Never return a false legacy no-op.
+        Reader-only capabilities with readonly false are legacy-only requests.
+        Another active owner causes a conflict, never implicit eviction. Retired
+        VM cleanup must durably reconcile its intents, devices and locks before
+        allowing a new writer; fence the exact librbd client/session, never a
+        shared hypervisor IP. The controller passes the validated node_id into
+        QEMU publish_context; NodeStage and NodePublish require exact equality
+        with local incarnation before any device or state effect.
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody:
         required: true
@@ -147,6 +170,11 @@ paths:
     post:
       operationId: deleteCsiAttachment
       summary: Ensure completed detach; null node_id means all incarnations
+      description: >-
+        Enumerate authoritative incarnations, including retired VMs and pending
+        intents. Retirement/FORCE heal cleanup persists across restarts and must
+        prove removal or isolation plus any required exact Ceph session fence.
+        Never unlock on timeout alone or blocklist a shared hypervisor IP.
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody:
         required: true
@@ -385,6 +413,10 @@ components:
           required: [transport]
           properties:
             transport: {const: legacy-krbd}
+          description: >-
+            Verified no-op for an authoritative legacy node and unadopted legacy
+            image without QEMU ownership, pending intent or prohibiting fence.
+            Never a fallback for native/adopted images or a disallowed QEMU route.
         - allOf:
             - {$ref: '#/components/schemas/VolumeShape'}
             - type: object
@@ -392,7 +424,12 @@ components:
               properties:
                 transport: {const: qemu}
                 volume_id: {$ref: '#/components/schemas/Handle'}
-                node_id: {$ref: '#/components/schemas/NodeId'}
+                node_id:
+                  $ref: '#/components/schemas/NodeId'
+                  description: >-
+                    Exact requested VM incarnation, copied into CSI publish_context.
+                    The node must match it to local configuration before stage or
+                    publish effects, including retries; no name/IP substitution.
                 device_serial:
                   type: string
                   minLength: 1
@@ -401,7 +438,10 @@ components:
                   description: >-
                     Exact ASCII serial of the QEMU scsi-hd device exposed over
                     virtio-scsi, stable for this volume and unique among disks
-                    attached to the VM. Never truncate, pad or normalize it.
+                    attached to the VM. Durably bind it to this volume and exact
+                    incarnation; never reuse it for another volume on that
+                    incarnation, including after detach or reboot. Never truncate,
+                    pad or normalize it.
                     virtio-blk is not supported by this transport contract.
                 readonly:
                   type: boolean

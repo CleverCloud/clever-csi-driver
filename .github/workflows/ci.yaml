@@ -33,6 +33,7 @@ jobs:
           python3 deploy/render.py --check
           python3 deploy/test_api_contract.py
           python3 -m openapi_spec_validator docs/axo-openapi-v1.yaml
+          python3 -m unittest discover -s deploy/sanity -p 'test_*.py'
   linux-mounts:
     needs: test
     runs-on: ubuntu-24.04

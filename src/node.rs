@@ -59,6 +59,30 @@ struct Spec {
     access_mode: i32,
 }
 
+impl Spec {
+    fn same_identity_and_security(&self, other: &Self) -> bool {
+        self.mode == other.mode
+            && self.access_mode == other.access_mode
+            && ["ro", "nosuid", "nodev", "noexec"].iter().all(|flag| {
+                self.flags.iter().any(|value| value == flag)
+                    == other.flags.iter().any(|value| value == flag)
+            })
+    }
+
+    fn replace_security_flags(&mut self, requested: &Self) {
+        let security = ["ro", "rw", "nosuid", "nodev", "noexec"];
+        self.flags.retain(|flag| !security.contains(&flag.as_str()));
+        self.flags.extend(
+            requested
+                .flags
+                .iter()
+                .filter(|flag| security.contains(&flag.as_str()))
+                .cloned(),
+        );
+        self.flags.sort();
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Volume {
     serial: String,
@@ -340,6 +364,19 @@ fn unique_mount<'a>(mounts: &'a [Mount], target: &Path) -> Result<Option<&'a Mou
 }
 
 impl NodeService {
+    fn verify_incarnation(&self, context: &HashMap<String, String>) -> Result<(), Status> {
+        let node_id = context
+            .get("node_id")
+            .ok_or_else(|| Status::invalid_argument("publish_context.node_id is required"))?;
+        validate_token(node_id, "publish_context.node_id", 256)?;
+        if node_id != &self.config.node_id {
+            return Err(Status::failed_precondition(
+                "publish_context must identify this VM incarnation; detach and reattach the volume",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn new(mut config: NodeConfig) -> Result<Self, NodeError> {
         validate_token(&config.node_id, "node_id (platform VM identity)", 256)
             .map_err(|e| NodeError::Configuration(e.message().to_owned()))?;
@@ -830,7 +867,7 @@ impl NodeService {
             self.verify_mount(volume, mount, &volume.staging_path)
                 .await?;
             Self::verify_mount_flags(mount, &volume.spec.flags)?;
-            return Ok(());
+            return self.grow_staged_filesystem(volume).await;
         }
         if mounts
             .iter()
@@ -856,6 +893,22 @@ impl NodeService {
             self.verify_mount(volume, mount, &volume.staging_path)
                 .await?;
             Self::verify_mount_flags(mount, &volume.spec.flags)?;
+        }
+        self.grow_staged_filesystem(volume).await
+    }
+
+    async fn grow_staged_filesystem(&self, volume: &Volume) -> Result<(), Status> {
+        if let Mode::Filesystem(fs_type) = &volume.spec.mode
+            && !volume.spec.flags.iter().any(|flag| flag == "ro")
+        {
+            self.current_device(volume).await?;
+            // Clone/restore can expose a larger device with the source's smaller
+            // filesystem. Both grow tools are idempotent when already full-sized.
+            // Run on retries too, so a completed mount is not mistaken for a
+            // completed stage after an interrupted or failed filesystem growth.
+            self.host
+                .grow(&volume.device, &volume.staging_path, fs_type)
+                .await?;
         }
         Ok(())
     }
@@ -905,6 +958,7 @@ impl NodeService {
         request: Request<csi::NodeStageVolumeRequest>,
     ) -> Result<Response<csi::NodeStageVolumeResponse>, Status> {
         let request = request.into_inner();
+        self.verify_incarnation(&request.publish_context)?;
         let path = self.path(&request.staging_target_path).await?;
         let serial = request
             .publish_context
@@ -947,7 +1001,7 @@ impl NodeService {
             .reconcile_conflicting_registrations(&mut next, &request.volume_id, &device)
             .await?;
         let volume = if let Some(mut volume) = previous.clone() {
-            if volume.device != device || volume.spec != spec {
+            if volume.device != device || !volume.spec.same_identity_and_security(&spec) {
                 let mounts = self.host.mounts().await?;
                 let paths: Vec<&Path> = std::iter::once(volume.staging_path.as_path())
                     .chain(volume.published.keys().map(PathBuf::as_path))
@@ -956,8 +1010,11 @@ impl NodeService {
                     .await?;
                 self.host.ensure_released(&device).await?;
                 volume.device = device;
-                volume.spec = spec;
+                volume.spec.replace_security_flags(&spec);
             }
+            // Harmless PV mountOptions edits do not alter the options actually
+            // applied to an existing stage, including after a process restart.
+            // Those edits take effect after a complete unstage and fresh stage.
             volume
         } else {
             self.require_no_device_mounts(&self.host.mounts().await?, &[&device], &[&path])
@@ -1007,6 +1064,7 @@ impl NodeService {
         request: Request<csi::NodePublishVolumeRequest>,
     ) -> Result<Response<csi::NodePublishVolumeResponse>, Status> {
         let request = request.into_inner();
+        self.verify_incarnation(&request.publish_context)?;
         validate_volume_id(&request.volume_id)?;
         let target = self.path(&request.target_path).await?;
         let staging = self.path(&request.staging_target_path).await?;
@@ -1018,7 +1076,7 @@ impl NodeService {
             .ok_or_else(|| Status::failed_precondition("volume must be staged first"))?
             .clone();
         if staging != volume.staging_path
-            || desired != volume.spec
+            || !desired.same_identity_and_security(&volume.spec)
             || request.publish_context.get("device_serial") != Some(&volume.serial)
         {
             return Err(Status::invalid_argument(
@@ -1051,20 +1109,22 @@ impl NodeService {
         let mounts = self.host.mounts().await?;
         let existing_mount = unique_mount(&mounts, &target)?;
         let registered = volume.published.contains_key(&target);
+        let target_has_mounts = mounts.iter().any(|mount| mount.target.starts_with(&target));
         if let Some(previous) = volume.published.get(&target) {
-            if *previous != readonly {
+            if *previous != readonly && target_has_mounts {
                 return Err(Status::already_exists(
                     "target was published with different read-only mode",
                 ));
             }
-        } else if existing_mount.is_some()
-            || mounts.iter().any(|mount| mount.target.starts_with(&target))
-        {
+        } else if target_has_mounts {
             return Err(Status::failed_precondition(
                 "unregistered mount exists at publish target",
             ));
         }
-        if !registered {
+        if volume.published.get(&target) != Some(&readonly) {
+            // A persisted intent can outlive its mount (for example on reboot).
+            // Only recompute its effective RO mode after proving no target or
+            // descendant mount remains; persist it before attempting the bind.
             let mut next = registry.clone();
             next.volumes
                 .get_mut(&request.volume_id)
@@ -1459,9 +1519,15 @@ impl NodeService {
             if let Mode::Filesystem(fs_type) = &volume.spec.mode {
                 context.insert("fs_type".into(), fs_type.clone());
             }
-            if spec(Some(&capability), &context)? != volume.spec {
+            let desired = spec(Some(&capability), &context)?;
+            if desired.mode != volume.spec.mode || desired.access_mode != volume.spec.access_mode {
                 return Err(Status::invalid_argument(
                     "expand capability differs from staged volume",
+                ));
+            }
+            if desired.flags.iter().any(|flag| flag == "ro") {
+                return Err(Status::failed_precondition(
+                    "cannot expand a volume requested read-only",
                 ));
             }
         }

@@ -78,7 +78,7 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
-          resources: {{ $.Values.sidecarResources | toJson }}
+          resources: {{ include "csi.sidecarResources" (dict "root" $ "role" $role) }}
           volumeMounts:
             - {name: socket, mountPath: /csi}
         {{- end }}

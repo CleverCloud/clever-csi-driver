@@ -119,19 +119,22 @@ impl csi::controller_server::Controller for CsiController {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("volume_capability is required"))?;
         required_capability_fields(cap)?;
-        if cap.access_mode.as_ref().is_some_and(|mode| {
-            matches!(mode.mode, 2 | 3) // SINGLE_NODE_READER_ONLY or MULTI_NODE_READER_ONLY
-        }) && !request.readonly
-        {
-            return Err(Status::invalid_argument(
-                "reader-only access mode requires readonly attachment",
-            ));
-        }
         // Historical ceph-csi nodes can support capabilities our QEMU Node
         // service cannot. Only Axo knows the route: constrain the atomic backend
         // operation instead of rejecting these volumes before classification.
         let volume_context = storage_metadata(request.volume_context.clone())?;
         let qemu_shape = capability(cap).and_then(|shape| {
+            // Legacy ROX PVs may have spec.csi.readOnly=false. Their node
+            // plugin enforces the access mode; only QEMU needs a readonly
+            // attachment before the guest can safely consume this request.
+            if cap.access_mode.as_ref().is_some_and(|mode| {
+                matches!(mode.mode, 2 | 3) // SINGLE_NODE_READER_ONLY or MULTI_NODE_READER_ONLY
+            }) && !request.readonly
+            {
+                return Err(Status::invalid_argument(
+                    "reader-only access mode requires readonly QEMU attachment",
+                ));
+            }
             storage_parameters(request.volume_context)?;
             validate_parameter_filesystem(&volume_context, &shape)?;
             Ok(shape)
@@ -197,6 +200,7 @@ impl csi::controller_server::Controller for CsiController {
                     return Err(axo::invalid_mutation_response("attachments"));
                 }
                 let mut context = shape_context(&shape);
+                context.insert("node_id".into(), node_id);
                 context.insert("device_serial".into(), device_serial);
                 context.insert("readonly".into(), readonly.to_string());
                 context

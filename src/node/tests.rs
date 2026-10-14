@@ -7,8 +7,11 @@ use std::sync::Mutex as StdMutex;
 struct Machine {
     mounts: Vec<Mount>,
     commands: Vec<String>,
+    discoveries: Vec<String>,
     fail_after_bind: bool,
     capacity: i64,
+    filesystem_capacity: i64,
+    fail_grow: bool,
     capacity_after_rescan: Option<i64>,
     device_missing: bool,
     device_ambiguous: bool,
@@ -41,7 +44,8 @@ struct FakeHost {
 #[async_trait]
 impl Host for FakeHost {
     async fn discover(&self, serial: &str) -> Result<Device, Status> {
-        let machine = self.machine.lock().unwrap();
+        let mut machine = self.machine.lock().unwrap();
+        machine.discoveries.push(serial.into());
         if machine.device_ambiguous {
             return Err(Status::failed_precondition("device serial ambiguous"));
         }
@@ -183,8 +187,19 @@ impl Host for FakeHost {
         machine.block_mounts.remove(target);
         Ok(())
     }
-    async fn grow(&self, _: &Device, _: &Path, _: &str) -> Result<(), Status> {
-        self.machine.lock().unwrap().commands.push("grow".into());
+    async fn grow(&self, device: &Device, target: &Path, _: &str) -> Result<(), Status> {
+        let mut machine = self.machine.lock().unwrap();
+        let mount = unique_mount(&machine.mounts, target)?.expect("growth needs a mounted FS");
+        assert_eq!((mount.major, mount.minor), (device.major, device.minor));
+        assert!(
+            !mount.options.contains("ro"),
+            "never grow a read-only mount"
+        );
+        machine.commands.push("grow".into());
+        if machine.fail_grow {
+            return Err(Status::internal("simulated filesystem growth failure"));
+        }
+        machine.filesystem_capacity = machine.capacity;
         Ok(())
     }
     async fn capacity(&self, _: &Device) -> Result<i64, Status> {
@@ -278,6 +293,7 @@ impl Fixture {
             fs_type: fs_type.map(str::to_owned),
             machine: StdMutex::new(Machine {
                 capacity: 1024 * 1024 * 1024,
+                filesystem_capacity: 1024 * 1024 * 1024,
                 ..Default::default()
             }),
         });
@@ -308,6 +324,7 @@ impl Fixture {
     }
     fn context(&self, block: bool) -> HashMap<String, String> {
         let mut context = HashMap::from([
+            ("node_id".into(), self.config.node_id.clone()),
             ("device_serial".into(), "volume-serial".into()),
             ("format_policy".into(), "preformatted".into()),
             (
@@ -333,6 +350,14 @@ impl Fixture {
             }),
             access_mode: Some(csi::volume_capability::AccessMode { mode: 1 }),
         }
+    }
+    fn mount_capability(&self, mount_flags: &[&str]) -> csi::VolumeCapability {
+        let mut capability = self.capability(false);
+        if let Some(csi::volume_capability::AccessType::Mount(mount)) = &mut capability.access_type
+        {
+            mount.mount_flags = mount_flags.iter().map(|flag| (*flag).into()).collect();
+        }
+        capability
     }
     fn stage(&self, block: bool) -> csi::NodeStageVolumeRequest {
         csi::NodeStageVolumeRequest {
@@ -382,7 +407,10 @@ async fn filesystem_lifecycle_is_idempotent_across_process_restart() {
         .node_stage_volume(Request::new(fixture.stage(false)))
         .await
         .unwrap();
-    assert_eq!(fixture.host.machine.lock().unwrap().commands, ["mount_fs"]);
+    assert_eq!(
+        fixture.host.machine.lock().unwrap().commands,
+        ["mount_fs", "grow", "grow"]
+    );
     assert!(
         service.registry.lock().await.volumes["volume-1"]
             .spec
@@ -750,6 +778,7 @@ async fn expansion_does_not_claim_success_when_capacity_is_still_old() {
         .node_stage_volume(Request::new(fixture.stage(false)))
         .await
         .unwrap();
+    fixture.host.machine.lock().unwrap().commands.clear();
     let error = service
         .node_expand_volume(Request::new(csi::NodeExpandVolumeRequest {
             volume_id: "volume-1".into(),
@@ -939,6 +968,7 @@ async fn expansion_validates_supplied_ranges_and_capabilities_before_growth() {
         .node_stage_volume(Request::new(fixture.stage(false)))
         .await
         .unwrap();
+    fixture.host.machine.lock().unwrap().commands.clear();
     for (required_bytes, limit_bytes) in [(0, 0), (-1, 0), (0, -1), (20, 10)] {
         let error = service
             .node_expand_volume(Request::new(csi::NodeExpandVolumeRequest {
@@ -1745,6 +1775,428 @@ async fn mount_options_can_change_only_after_old_mounts_are_gone() {
             .flags
             .contains(&"noexec".into())
     );
+}
+
+#[tokio::test]
+async fn foreign_or_missing_incarnation_cannot_discover_a_colliding_disk() {
+    for block in [false, true] {
+        let fixture = Fixture::new(Some("xfs"));
+        // A different volume is attached to this VM under the serial cached in
+        // an earlier incarnation's VolumeAttachment, and has not been staged.
+        fixture.host.machine.lock().unwrap().devices.insert(
+            "reused-slot-0".into(),
+            Device {
+                path: fixture.config.device_root.join("sdc"),
+                major: 8,
+                minor: 32,
+            },
+        );
+        let service = fixture.service();
+        for (incarnation, expected) in [
+            (None, tonic::Code::InvalidArgument),
+            (Some(""), tonic::Code::InvalidArgument),
+            (Some("invalid node id"), tonic::Code::InvalidArgument),
+            (Some("vm-incarnation-old"), tonic::Code::FailedPrecondition),
+        ] {
+            let mut request = fixture.stage(block);
+            request
+                .publish_context
+                .insert("device_serial".into(), "reused-slot-0".into());
+            request.publish_context.remove("node_id");
+            if let Some(incarnation) = incarnation {
+                request
+                    .publish_context
+                    .insert("node_id".into(), incarnation.into());
+            }
+            assert_eq!(
+                service
+                    .node_stage_volume(Request::new(request))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                expected
+            );
+        }
+        {
+            let machine = fixture.host.machine.lock().unwrap();
+            assert!(machine.discoveries.is_empty());
+            assert!(machine.commands.is_empty());
+            assert!(machine.mounts.is_empty());
+        }
+        assert!(service.registry.lock().await.volumes.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn publish_checks_incarnation_before_using_an_existing_stage() {
+    let fixture = Fixture::new(Some("xfs"));
+    let service = fixture.service();
+    service
+        .node_stage_volume(Request::new(fixture.stage(false)))
+        .await
+        .unwrap();
+    {
+        let mut machine = fixture.host.machine.lock().unwrap();
+        machine.discoveries.clear();
+        machine.commands.clear();
+    }
+    for (incarnation, expected) in [
+        (None, tonic::Code::InvalidArgument),
+        (Some(""), tonic::Code::InvalidArgument),
+        (Some("invalid node id"), tonic::Code::InvalidArgument),
+        (Some("vm-incarnation-old"), tonic::Code::FailedPrecondition),
+    ] {
+        let mut request = fixture.publish(false, false);
+        request.publish_context.remove("node_id");
+        if let Some(incarnation) = incarnation {
+            request
+                .publish_context
+                .insert("node_id".into(), incarnation.into());
+        }
+        assert_eq!(
+            service
+                .node_publish_volume(Request::new(request))
+                .await
+                .unwrap_err()
+                .code(),
+            expected
+        );
+    }
+    {
+        let machine = fixture.host.machine.lock().unwrap();
+        assert!(machine.discoveries.is_empty());
+        assert!(machine.commands.is_empty());
+        assert_eq!(machine.mounts.len(), 1);
+    }
+    assert!(
+        service.registry.lock().await.volumes["volume-1"]
+            .published
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn harmless_mount_option_edits_preserve_staged_flags_until_unstage() {
+    let fixture = Fixture::new(Some("xfs"));
+    let service = fixture.service();
+    let mut original = fixture.stage(false);
+    original.volume_capability = Some(fixture.mount_capability(&["noatime"]));
+    service
+        .node_stage_volume(Request::new(original))
+        .await
+        .unwrap();
+    let mut changed = fixture.stage(false);
+    changed.volume_capability = Some(fixture.mount_capability(&["discard"]));
+    service
+        .node_stage_volume(Request::new(changed.clone()))
+        .await
+        .unwrap();
+    let mut publish = fixture.publish(false, false);
+    publish.volume_capability = changed.volume_capability.clone();
+    service
+        .node_publish_volume(Request::new(publish.clone()))
+        .await
+        .unwrap();
+    // kubelet supplies the edited PV capability to NodeExpand too. Mount flags
+    // do not change an expansion's shape and must not cause an infeasible error.
+    service
+        .node_expand_volume(Request::new(csi::NodeExpandVolumeRequest {
+            volume_id: "volume-1".into(),
+            volume_path: fixture.stage_path(),
+            volume_capability: Some(fixture.mount_capability(&["discard", "noexec"])),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    drop(service);
+    let service = fixture.service();
+    service
+        .node_stage_volume(Request::new(changed.clone()))
+        .await
+        .unwrap();
+    service
+        .node_publish_volume(Request::new(publish.clone()))
+        .await
+        .unwrap();
+    let mut second_pod = publish.clone();
+    second_pod.target_path += "-second";
+    service
+        .node_publish_volume(Request::new(second_pod.clone()))
+        .await
+        .unwrap();
+    for mount in &fixture.host.machine.lock().unwrap().mounts {
+        assert!(mount.options.contains("noatime"));
+        assert!(!mount.options.contains("discard"));
+        assert!(!mount.options.contains("noexec"));
+    }
+    assert!(
+        service.registry.lock().await.volumes["volume-1"]
+            .spec
+            .flags
+            .contains(&"noatime".into())
+    );
+    // A VM reboot may also renumber the device. It still does not apply edited
+    // non-security flags to a stage whose ownership remains registered.
+    {
+        let mut machine = fixture.host.machine.lock().unwrap();
+        machine.mounts.clear();
+        machine.replacement = Some(Device {
+            path: fixture.config.device_root.join("sdc"),
+            major: 8,
+            minor: 32,
+        });
+    }
+    drop(service);
+    let service = fixture.service();
+    service
+        .node_stage_volume(Request::new(changed.clone()))
+        .await
+        .unwrap();
+    for request in [publish.clone(), second_pod.clone()] {
+        service
+            .node_publish_volume(Request::new(request))
+            .await
+            .unwrap();
+    }
+    for mount in &fixture.host.machine.lock().unwrap().mounts {
+        assert!(mount.options.contains("noatime"));
+        assert!(!mount.options.contains("discard"));
+    }
+    for target_path in [publish.target_path, second_pod.target_path] {
+        service
+            .node_unpublish_volume(Request::new(csi::NodeUnpublishVolumeRequest {
+                volume_id: "volume-1".into(),
+                target_path,
+            }))
+            .await
+            .unwrap();
+    }
+    service
+        .node_unstage_volume(Request::new(csi::NodeUnstageVolumeRequest {
+            volume_id: "volume-1".into(),
+            staging_target_path: fixture.stage_path(),
+        }))
+        .await
+        .unwrap();
+    service
+        .node_stage_volume(Request::new(changed))
+        .await
+        .unwrap();
+    let machine = fixture.host.machine.lock().unwrap();
+    let mount = unique_mount(&machine.mounts, Path::new(&fixture.stage_path()))
+        .unwrap()
+        .unwrap();
+    assert!(mount.options.contains("discard"));
+    assert!(!mount.options.contains("noatime"));
+}
+
+#[tokio::test]
+async fn security_mount_option_edits_do_not_modify_live_mounts() {
+    for flag in ["ro", "noexec"] {
+        let fixture = Fixture::new(Some("xfs"));
+        let service = fixture.service();
+        service
+            .node_stage_volume(Request::new(fixture.stage(false)))
+            .await
+            .unwrap();
+        service
+            .node_publish_volume(Request::new(fixture.publish(false, false)))
+            .await
+            .unwrap();
+        let previous = fixture.host.machine.lock().unwrap().mounts.clone();
+        fixture.host.machine.lock().unwrap().commands.clear();
+        let mut stage = fixture.stage(false);
+        stage.volume_capability = Some(fixture.mount_capability(&[flag]));
+        assert_eq!(
+            service
+                .node_stage_volume(Request::new(stage.clone()))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::FailedPrecondition
+        );
+        let mut publish = fixture.publish(false, false);
+        publish.volume_capability = stage.volume_capability;
+        assert_eq!(
+            service
+                .node_publish_volume(Request::new(publish))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+        let machine = fixture.host.machine.lock().unwrap();
+        assert!(machine.commands.is_empty());
+        assert_eq!(machine.mounts, previous);
+    }
+}
+
+#[tokio::test]
+async fn vanished_publication_recomputes_effective_readonly_after_restaging() {
+    let fixture = Fixture::new(Some("xfs"));
+    let service = fixture.service();
+    let capability = fixture.mount_capability(&["ro"]);
+    let mut stage = fixture.stage(false);
+    stage.volume_capability = Some(capability.clone());
+    service
+        .node_stage_volume(Request::new(stage))
+        .await
+        .unwrap();
+    let mut publish = fixture.publish(false, false);
+    publish.volume_capability = Some(capability);
+    service
+        .node_publish_volume(Request::new(publish))
+        .await
+        .unwrap();
+    assert!(
+        service.registry.lock().await.volumes["volume-1"].published
+            [Path::new(&fixture.target_path())]
+    );
+    // A reboot loses mounts but retains the stage and publication intents.
+    fixture.host.machine.lock().unwrap().mounts.clear();
+    drop(service);
+    let service = fixture.service();
+    service
+        .node_stage_volume(Request::new(fixture.stage(false)))
+        .await
+        .unwrap();
+    service
+        .node_publish_volume(Request::new(fixture.publish(false, false)))
+        .await
+        .unwrap();
+    assert!(
+        !service.registry.lock().await.volumes["volume-1"].published
+            [Path::new(&fixture.target_path())]
+    );
+    let machine = fixture.host.machine.lock().unwrap();
+    assert!(
+        machine
+            .mounts
+            .iter()
+            .all(|mount| mount.options.contains("rw"))
+    );
+}
+
+#[tokio::test]
+async fn publication_intent_cannot_change_while_target_or_descendant_is_mounted() {
+    for descendant in [false, true] {
+        let fixture = Fixture::new(Some("xfs"));
+        let service = fixture.service();
+        service
+            .node_stage_volume(Request::new(fixture.stage(false)))
+            .await
+            .unwrap();
+        service
+            .node_publish_volume(Request::new(fixture.publish(false, true)))
+            .await
+            .unwrap();
+        {
+            let mut machine = fixture.host.machine.lock().unwrap();
+            if descendant {
+                machine
+                    .mounts
+                    .iter_mut()
+                    .find(|mount| mount.target == Path::new(&fixture.target_path()))
+                    .unwrap()
+                    .target
+                    .push("nested");
+            }
+            machine.commands.clear();
+        }
+        assert_eq!(
+            service
+                .node_publish_volume(Request::new(fixture.publish(false, false)))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::AlreadyExists
+        );
+        assert!(fixture.host.machine.lock().unwrap().commands.is_empty());
+        assert!(
+            service.registry.lock().await.volumes["volume-1"].published
+                [Path::new(&fixture.target_path())]
+        );
+    }
+}
+
+#[tokio::test]
+async fn restored_filesystem_is_grown_at_stage_and_failed_growth_is_retried() {
+    for fs_type in ["xfs", "ext4"] {
+        let fixture = Fixture::new(Some(fs_type));
+        {
+            let mut machine = fixture.host.machine.lock().unwrap();
+            machine.capacity = 50 * 1024 * 1024 * 1024;
+            machine.filesystem_capacity = 10 * 1024 * 1024 * 1024;
+            machine.fail_grow = true;
+        }
+        let service = fixture.service();
+        let mut stage = fixture.stage(false);
+        stage
+            .publish_context
+            .insert("fs_type".into(), fs_type.into());
+        if let Some(csi::volume_capability::AccessType::Mount(mount)) = stage
+            .volume_capability
+            .as_mut()
+            .unwrap()
+            .access_type
+            .as_mut()
+        {
+            mount.fs_type = fs_type.into();
+        }
+        assert_eq!(
+            service
+                .node_stage_volume(Request::new(stage.clone()))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Aborted
+        );
+        {
+            let mut machine = fixture.host.machine.lock().unwrap();
+            assert_eq!(machine.filesystem_capacity, 10 * 1024 * 1024 * 1024);
+            assert_eq!(machine.mounts.len(), 1);
+            machine.fail_grow = false;
+        }
+        // Retry after process restart must finish growth on the existing mount.
+        drop(service);
+        let service = fixture.service();
+        service
+            .node_stage_volume(Request::new(stage))
+            .await
+            .unwrap();
+        let machine = fixture.host.machine.lock().unwrap();
+        assert_eq!(machine.filesystem_capacity, machine.capacity);
+        assert_eq!(machine.commands, ["mount_fs", "grow", "grow"]);
+    }
+}
+
+#[tokio::test]
+async fn readonly_and_block_stages_never_attempt_filesystem_growth() {
+    for block in [false, true] {
+        let fixture = Fixture::new(Some("xfs"));
+        {
+            let mut machine = fixture.host.machine.lock().unwrap();
+            machine.capacity = 50 * 1024 * 1024 * 1024;
+            machine.filesystem_capacity = 10 * 1024 * 1024 * 1024;
+            machine.fail_grow = true;
+        }
+        let service = fixture.service();
+        let mut stage = fixture.stage(block);
+        if !block {
+            stage
+                .publish_context
+                .insert("readonly".into(), "true".into());
+        }
+        for _ in 0..2 {
+            service
+                .node_stage_volume(Request::new(stage.clone()))
+                .await
+                .unwrap();
+        }
+        let machine = fixture.host.machine.lock().unwrap();
+        assert!(!machine.commands.contains(&"grow".into()));
+        assert_eq!(machine.filesystem_capacity, 10 * 1024 * 1024 * 1024);
+    }
 }
 
 #[tokio::test]

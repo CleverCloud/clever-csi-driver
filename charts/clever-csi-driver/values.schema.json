@@ -282,6 +282,17 @@
         }
       }
     },
+    "sidecarResourcesByRole": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "registrar": {"$ref": "#/properties/sidecarResources"},
+        "attacher": {"$ref": "#/properties/sidecarResources"},
+        "provisioner": {"$ref": "#/properties/sidecarResources"},
+        "resizer": {"$ref": "#/properties/sidecarResources"},
+        "snapshotter": {"$ref": "#/properties/sidecarResources"}
+      }
+    },
     "sidecarImages": {
       "type": "object",
       "additionalProperties": false,

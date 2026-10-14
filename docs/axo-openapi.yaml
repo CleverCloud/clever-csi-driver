@@ -9,7 +9,7 @@ info:
     JSON fields are camelCase and CSI business enums are SCREAMING_SNAKE_CASE. The shared Axo error-context representation retains its existing snake_case discriminants and fields. Keys inside parameters and volumeContext retain their CSI spellings. JSON Schema maxLength counts Unicode characters, not UTF-8 bytes: x-maxUtf8Bytes documents additional byte limits enforced by server validation. Request fields, types and business enums are validated; unknown request fields are rejected. Responses may add fields. Feature names are forward-compatible strings; features enable operations, never alternative response shapes. New business enum values require a newer pinned Clever-API-Version.
     Mutations reconcile durable intent. Success means verified operation-specific postconditions, never merely accepted work; HTTP 202 is not emitted. A bounded Prefer wait either reaches completion or returns 409 operation-in-progress with Retry-After. Client timeout or disconnect does not cancel intent. Replays join the operation and inspect current state; no stale success is replayed. No Idempotency-Key header is used. Creation identity is the scoped CSI name; attachment identity is the immutable volume handle and exact node incarnation. Handles are never reassigned, including after delete and recreate under the same name.
     DELETE succeeds only with HTTP 200 and a validated outcome decided by the server after authoritative lookup. No HTTP 404, malformed identity or missing route is converted into successful deletion. Cross-cluster resources are indistinguishable from absent resources after authorization, but cluster absence is a distinct error. Resource deletion preserves dependent snapshots and clones and never implicitly detaches a mounted volume.
-    Handler errors use HTTPErrorBody. Existing authentication and path-validation middleware may return the legacy cc-api or OVD forms documented below; clients fall back to the HTTP status. The machine-readable x-csi-error-codes catalogue defines this revision's handler codes and RPC-specific mappings. Success bodies must match the requested identity, shape, read-only policy and capacity; malformed or inconsistent success is DATA_LOSS. Unknown errors use the documented status fallback, never delete success.
+    Handler errors use HTTPErrorBody. Existing authentication and path-validation middleware may return the legacy cc-api or OVD forms documented below; clients fall back to the HTTP status. The machine-readable x-csi-error-codes catalogue defines this revision's handler codes and RPC-specific mappings. Success bodies must match the requested identity, shape, read-only policy and capacity. Invalid mutation successes are retryable UNAVAILABLE with the same reconciliation identity; malformed read successes are DATA_LOSS. Unknown errors use the documented status fallback, never delete success.
     The driver must pin Clever-API-Version to its compiled contract date on every request. Human clients may omit it to select the newest revision. Dates are RFC 3339 UTC with up to nine fractional digits; timestamp nanoseconds must be preserved. Read operations admit the scoped driver Biscuit or organization OAuth1 through existing membership and admission checks, except capabilities and POST resolve, which are driver-only. Mutations are driver-only; this does not extend existing human write access to CSI resources.
     Request bodies are bounded by maxRequestBytes. Response pages are limited by both item count and serialized bytes, never more than 1 MiB. The proposed wait defaults of 30 seconds and maximum of 110 seconds require validation against the real HTTP frontend and all client deadlines before rollout. The client leaves transport slack inside both its HTTP and remaining gRPC deadline; it must not add slack after exceeding either budget.
 servers:
@@ -116,7 +116,10 @@ paths:
         in-flight operation is joined for a compatible replay; conflicting work returns operation-in-progress.
         Creating a resource after an older handle was deleted allocates a new never-reused handle. Clone/restore
         require their optional features. Unsupported encryption/RWX is rejected. Only Axo initializes
-        the filesystem; the guest never formats.'
+        the filesystem; the guest never formats. Writable NodeStage grows the existing filesystem to
+        guest device capacity before success. Before read-only clone/restore attachment eligibility,
+        Axo must grow and verify the filesystem to the requested capacity under exclusive maintenance
+        ownership; growing only the image is insufficient. Growth never authorizes reformatting.'
       security:
       - {biscuit: []}
       parameters:
@@ -401,7 +404,13 @@ paths:
         attached-elsewhere. Fencing addresses superseded work or an incarnation authoritatively retired
         by the platform, not destruction of an active owner to satisfy the request. LEGACY_KRBD is available
         only for a verified unadopted legacy image without live/pending QEMU ownership or a fence forbidding
-        return to legacy access.'
+        return to legacy access. allowedTransports is required and enforced atomically against the
+        authoritative route before any attachment/adoption mutation; an excluded route returns 412
+        transport-not-allowed. Verify ATTACHMENT_ALLOWED_TRANSPORTS on capabilities before every attach.
+        Retirement/FORCE heal durably reconciles old intents, devices and locks across restarts, fencing
+        the exact librbd client/session rather than a shared hypervisor IP. A replacement incarnation
+        cannot inherit the old owner. QEMU nodeId is copied into publish_context.node_id and must match
+        local incarnation before any NodeStage/NodePublish effect, including retries.'
       security:
       - {biscuit: []}
       parameters:
@@ -414,7 +423,8 @@ paths:
         clever.kubernetes.incompatible-resource, clever.kubernetes.operation-in-progress, clever.kubernetes.attached-elsewhere,
         clever.kubernetes.attachment-conflict, clever.kubernetes.incarnation-unknown, clever.kubernetes.shape-mismatch,
         clever.kubernetes.node-not-attachable, clever.kubernetes.fencing-required, clever.kubernetes.legacy-path-not-released,
-        clever.kubernetes.attachment-limit, clever.kubernetes.hypervisor-unreachable, clever.kubernetes.unsupported-capability]
+        clever.kubernetes.attachment-limit, clever.kubernetes.hypervisor-unreachable, clever.kubernetes.unsupported-capability,
+        clever.kubernetes.transport-not-allowed]
       responses:
         '200':
           description: Verified success; see operation postconditions.
@@ -982,7 +992,9 @@ components:
       additionalProperties: {type: string, maxLength: 1024, x-maxUtf8Bytes: 1024}
       description: Untrusted CSI metadata, never Secret contents. Preserve keys, including CSI snake_case
         spellings. Validate hints such as pool, namespace, cluster and filesystem against authoritative
-        policy; reject unsupported parameters, encryption and RWX. Reject credential-bearing secret/key/password/token
+        policy. Reject unsupported parameters, encryption and RWX on new provisioning/QEMU paths.
+        Legacy-only attachments retain existing capabilities and encryption/mounter metadata for
+        authoritative routing; do not apply QEMU restrictions before classification. Reject credential-bearing secret/key/password/token
         parameters. Enforce UTF-8 byte limits explicitly; deriving a BTreeMap schema alone does not enforce
         propertyNames or byte counts. Do not log the map in clear text. Limits apply to UTF-8 bytes after
         decoding, with total serialized request bytes bounded separately.
@@ -1003,6 +1015,24 @@ components:
         then:
           properties:
             fsType: {type: string, enum: [XFS, EXT4]}
+      - if:
+          properties:
+            volumeMode: {const: BLOCK}
+          required: [volumeMode]
+        then:
+          properties:
+            fsType: {type: 'null'}
+    KubernetesExistingVolumeShape:
+      type: object
+      required: [volumeMode, fsType]
+      properties:
+        volumeMode: {type: string, enum: [FILESYSTEM, BLOCK]}
+        fsType: {type: [string, 'null'], minLength: 1}
+      description: Existing-volume shape for authoritative legacy routing and expansion. A null
+        filesystem means unspecified; preserve an explicit filesystem even when it is not XFS/ext4.
+        Block has no filesystem. This does not permit that shape on the QEMU path.
+      additionalProperties: false
+      allOf:
       - if:
           properties:
             volumeMode: {const: BLOCK}
@@ -1047,9 +1077,9 @@ components:
           - {type: 'null'}
         status: {type: string, enum: [CREATING, AVAILABLE, IN_USE, EXPANDING, DELETING, FAILED]}
         volumeMode: {type: string, enum: [FILESYSTEM, BLOCK]}
-        fsType: {type: [string, 'null'], enum: [XFS, EXT4, null]}
+        fsType: {type: [string, 'null'], minLength: 1}
         capacityBytes: {type: integer, format: int64, minimum: 0}
-        formatPolicy: {type: string, enum: [PREFORMATTED]}
+        formatPolicy: {type: string, minLength: 1}
         source:
           anyOf:
           - {$ref: '#/components/schemas/KubernetesVolumeSource'}
@@ -1064,8 +1094,9 @@ components:
       description: Public observation of a resource and its lifecycle. capacityBytes is observed backend
         capacity, zero only before allocation. creationDate records the durable creation intent, not retry
         or completion time. name may be null for an inventoried legacy image. GET/list do not adopt. Initialization
-        is performed by Axo before successful ensure/attach; the node never formats a disk. Unknown response
-        fields are tolerated.
+        is performed by Axo before new provisioning/QEMU attachment; the node never formats a disk.
+        Unadopted legacy observations/expansion preserve existing filesystem and initialization policy.
+        Native/adopted records remain restricted to the QEMU policy. Unknown response fields are tolerated.
       allOf:
       - if:
           properties:
@@ -1073,7 +1104,7 @@ components:
           required: [volumeMode]
         then:
           properties:
-            fsType: {type: string, enum: [XFS, EXT4]}
+            fsType: {type: string, minLength: 1}
       - if:
           properties:
             volumeMode: {const: BLOCK}
@@ -1081,6 +1112,18 @@ components:
         then:
           properties:
             fsType: {type: 'null'}
+      - if:
+          anyOf:
+          - properties:
+              provenance: {const: NATIVE}
+            required: [provenance]
+          - properties:
+              adopted: {const: true}
+            required: [adopted]
+        then:
+          properties:
+            fsType: {type: [string, 'null'], enum: [XFS, EXT4, null]}
+            formatPolicy: {const: PREFORMATTED}
       - if:
           properties:
             provenance: {const: NATIVE}
@@ -1095,8 +1138,9 @@ components:
       - properties:
           status: {type: string, enum: [AVAILABLE, IN_USE]}
           capacityBytes: {type: integer, format: int64, minimum: 1}
-      description: 'Mutation success: initialized image and verified requested shape, content source and
-        capacity. No in-progress or failed state is returned as successful ensure/expand.'
+      description: 'Mutation success: verified requested shape, content source and capacity, plus
+        initialization for new provisioning or QEMU eligibility. Legacy expansion preserves existing
+        policy. No in-progress or failed state is returned as successful ensure/expand.'
     KubernetesVolumeEnsure:
       type: object
       required: [name, volumeMode, fsType, requiredBytes, parameters]
@@ -1140,7 +1184,7 @@ components:
         parameters: {$ref: '#/components/schemas/KubernetesCsiParameters'}
         expectedShape:
           anyOf:
-          - {$ref: '#/components/schemas/KubernetesVolumeShape'}
+          - {$ref: '#/components/schemas/KubernetesExistingVolumeShape'}
           - {type: 'null'}
       description: Read-only verification. Return the observed record when it can be verified, even if
         its shape differs from expectedShape, so the driver can answer validation negatively. A positively
@@ -1155,10 +1199,11 @@ components:
         limitBytes: {type: [integer, 'null'], format: int64, minimum: 1}
         expectedShape:
           anyOf:
-          - {$ref: '#/components/schemas/KubernetesVolumeShape'}
+          - {$ref: '#/components/schemas/KubernetesExistingVolumeShape'}
           - {type: 'null'}
       description: Monotonic expansion. Validate expectedShape before mutation. Re-observe image capacity
-        and each QEMU attachment after resize. Grow the image filesystem from an offline maintenance mount
+        and each QEMU attachment after resize, even if the RBD image already satisfies the range on retry;
+        a failed block_resize must be completed before success. Grow the image filesystem from an offline maintenance mount
         when detached; for mounted volumes expose the enlarged guest device and let NodeExpandVolume rescan/grow
         the filesystem. No success while an incompatible legacy session makes the operation unsafe.
       additionalProperties: false
@@ -1175,8 +1220,9 @@ components:
           description: Exact QEMU scsi-hd serial exposed by the guest through SCSI VPD page 0x80. Stable
             for the volume across retries, reboot and migration of the same VM incarnation. Do not rotate
             it merely because attachment generation or fencing epoch changes. Never reassign it to another
-            volume while cached publish context can still exist; never truncate, pad or normalize. virtio-blk
-            is not supported.
+            volume on that incarnation, including after detach, reboot or cleanup. Persist the
+            volume/incarnation binding because cached publish context can replay; never truncate,
+            pad or normalize. virtio-blk is not supported.
     KubernetesVolumeAttachment:
       type: object
       required: [volumeId, nodeId, transport, device, generation, readonly, volumeMode, fsType, formatPolicy,
@@ -1192,8 +1238,8 @@ components:
         generation: {type: integer, format: int64, minimum: 1}
         readonly: {type: boolean}
         volumeMode: {type: string, enum: [FILESYSTEM, BLOCK]}
-        fsType: {type: [string, 'null'], enum: [XFS, EXT4, null]}
-        formatPolicy: {type: string, enum: [PREFORMATTED]}
+        fsType: {type: [string, 'null'], minLength: 1}
+        formatPolicy: {type: string, minLength: 1}
         status: {type: string, enum: [ATTACHING, ATTACHED, DETACHING, FAILED]}
         attachedAt:
           anyOf:
@@ -1211,7 +1257,9 @@ components:
         report blockdev --getro = 1; a read-only bind mount alone does not protect a device inode. LEGACY_KRBD
         is restricted to a verified LEGACY image not yet adopted, with no live or pending QEMU claim and
         no recorded fence forbidding legacy access. Native/adopted volumes cannot use this path; rollback
-        requires a separately reviewed workflow.
+        requires a separately reviewed workflow. Legacy records preserve their existing filesystem
+        and initialization policy; only QEMU requires XFS/ext4 and PREFORMATTED. QEMU nodeId is the
+        exact incarnation passed to the node in publish_context.node_id, checked before any effect.
       allOf:
       - if:
           properties:
@@ -1219,7 +1267,7 @@ components:
           required: [volumeMode]
         then:
           properties:
-            fsType: {type: string, enum: [XFS, EXT4]}
+            fsType: {type: string, minLength: 1}
       - if:
           properties:
             volumeMode: {const: BLOCK}
@@ -1234,6 +1282,8 @@ components:
         then:
           properties:
             device: {$ref: '#/components/schemas/KubernetesCsiDevice'}
+            fsType: {type: [string, 'null'], enum: [XFS, EXT4, null]}
+            formatPolicy: {const: PREFORMATTED}
       - if:
           properties:
             transport: {const: LEGACY_KRBD}
@@ -1257,27 +1307,46 @@ components:
         and readonly policy. An instruction queued to a hypervisor is not success.
     KubernetesVolumeAttachmentEnsure:
       type: object
-      required: [nodeId, readonly, volumeMode, fsType, volumeContext]
+      required: [nodeId, readonly, volumeMode, fsType, volumeContext, allowedTransports]
       properties:
         nodeId: {$ref: '#/components/schemas/KubernetesNodeId'}
         readonly: {type: boolean}
         volumeMode: {type: string, enum: [FILESYSTEM, BLOCK]}
-        fsType: {type: [string, 'null'], enum: [XFS, EXT4, null]}
+        fsType: {type: [string, 'null'], minLength: 1}
         volumeContext: {$ref: '#/components/schemas/KubernetesCsiParameters'}
+        allowedTransports:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, enum: [LEGACY_KRBD, QEMU]}
       description: Ensure the requested volume/node pair. The same compatible pair returns its existing
         observed attachment; another live owner returns attached-elsewhere without implicit detach. QEMU
         requires a proven current incarnation, legacy path release, completed fencing and an observed
         device. First QEMU attachment may adopt an inventoried legacy volume exactly once. LEGACY_KRBD
         is allowed only if LEGACY_POOL_ROUTING is enabled and the authoritative legacy route is verified.
+        Verify ATTACHMENT_ALLOWED_TRANSPORTS before every request. Apply allowedTransports atomically
+        before mutation; exclusion returns 412 transport-not-allowed, never a false legacy no-op.
+        Unsupported QEMU shapes, modes, options or metadata and reader-only modes with readonly false
+        require a legacy-only allowlist. Legacy filesystem null means unspecified. Structural and secret
+        validation still apply. Native/adopted images and live/pending QEMU ownership never qualify as legacy.
       additionalProperties: false
       allOf:
       - if:
           properties:
-            volumeMode: {const: FILESYSTEM}
-          required: [volumeMode]
+            allowedTransports:
+              contains: {const: QEMU}
+          required: [allowedTransports]
         then:
           properties:
-            fsType: {type: string, enum: [XFS, EXT4]}
+            fsType: {type: [string, 'null'], enum: [XFS, EXT4, null]}
+          allOf:
+          - if:
+              properties:
+                volumeMode: {const: FILESYSTEM}
+              required: [volumeMode]
+            then:
+              properties:
+                fsType: {type: string, enum: [XFS, EXT4]}
       - if:
           properties:
             volumeMode: {const: BLOCK}
@@ -1517,8 +1586,11 @@ components:
           type: array
           uniqueItems: true
           items: {type: string}
+          contains: {const: ATTACHMENT_ALLOWED_TRANSPORTS}
           description: 'This revision requires: VOLUME_ENSURE, VOLUME_RESOLVE, VOLUME_DELETE, ATTACHMENT_ENSURE,
-            ATTACHMENT_DELETE, ATTACHMENT_READONLY. Unknown strings are ignored, not decoding failures.'
+            ATTACHMENT_DELETE, ATTACHMENT_READONLY, ATTACHMENT_ALLOWED_TRANSPORTS. The last feature
+            guarantees authoritative allowlist enforcement before mutation and is checked before every
+            attach. Unknown strings are ignored, not decoding failures.'
         optional:
           type: array
           uniqueItems: true
@@ -1679,7 +1751,8 @@ components:
         clever.kubernetes.cluster-not-found, clever.kubernetes.incompatible-resource, clever.kubernetes.operation-in-progress,
         clever.kubernetes.volume-in-use, clever.kubernetes.attached-elsewhere, clever.kubernetes.attachment-conflict,
         clever.kubernetes.incarnation-unknown, clever.kubernetes.device-busy, clever.kubernetes.legacy-session-present,
-        clever.kubernetes.shape-mismatch, clever.kubernetes.node-not-attachable, clever.kubernetes.fencing-required,
+        clever.kubernetes.shape-mismatch, clever.kubernetes.node-not-attachable, clever.kubernetes.transport-not-allowed,
+        clever.kubernetes.fencing-required,
         clever.kubernetes.legacy-path-not-released, clever.kubernetes.attachment-limit, clever.kubernetes.storage-quota-exceeded,
         clever.kubernetes.request-too-large, clever.kubernetes.rate-limited, clever.kubernetes.snapshot-failed,
         clever.kubernetes.unsupported-capability, clever.kubernetes.hypervisor-unreachable, clever.kubernetes.backend-unavailable,
@@ -1824,6 +1897,12 @@ x-csi-error-codes:
     csiCode: FAILED_PRECONDITION
     contextType: resource
     description: Known live VM lacks the required virtio-scsi/hotplug support.
+  clever.kubernetes.transport-not-allowed:
+    httpStatus: 412
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: The authoritative attachment route is excluded by allowedTransports. No attachment,
+      adoption or ownership mutation was performed. Never replace the excluded route with a legacy no-op.
   clever.kubernetes.fencing-required:
     httpStatus: 412
     csiCode: FAILED_PRECONDITION
@@ -1905,4 +1984,5 @@ x-csi-http-fallback:
   transportFailure: UNAVAILABLE
   redirect: FAILED_PRECONDITION
   unexpected202: ABORTED
-  invalidSuccessBody: DATA_LOSS
+  invalidMutationSuccessBody: UNAVAILABLE
+  invalidReadSuccessBody: DATA_LOSS

@@ -98,10 +98,10 @@ spec:
             - ALL
         resources:
           limits:
-            memory: 128Mi
+            memory: 512Mi
           requests:
             cpu: 10m
-            memory: 32Mi
+            memory: 128Mi
         volumeMounts:
         - name: socket
           mountPath: /csi

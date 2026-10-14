@@ -138,6 +138,15 @@ Sources smaller than the requested volume may be grown; requests that would
 truncate source data must fail. Clones must be independent or retain tracked
 dependencies so source deletion cannot corrupt them.
 
+After a writable filesystem stage, the Node plugin grows the existing filesystem
+to the guest device capacity before reporting success; this also covers a fresh
+PVC restored or cloned into a larger image without a separate `NodeExpandVolume`
+call. A read-only stage cannot perform that growth. Before making a clone/restore
+eligible for read-only attachment, Axo must therefore have grown and verified its
+filesystem to the requested capacity under exclusive maintenance ownership.
+Growing only the RBD image is insufficient. Preserve the source contents and
+filesystem; growth never authorizes formatting an existing image.
+
 CSI creation names preserve Unicode and ordinary whitespace (including tab,
 line feed and carriage return). Forbidden control ranges are U+0000–U+0008,
 U+000B–U+000C, U+000E–U+001F and U+007F–U+009F; a name must be nonempty and at
@@ -183,7 +192,10 @@ filesystem, untrusted `volume_context`, and `allowed_transports`. The controller
 checks the `attachment.allowed-transports` capability before every attach,
 within the same CSI deadline. Requests compatible with the QEMU policy allow
 `["legacy-krbd", "qemu"]`; unsupported QEMU access modes, mount flags, filesystems,
-encryption or mounters allow only `["legacy-krbd"]`. The backend must classify
+encryption or mounters allow only `["legacy-krbd"]`. Reader-only access modes
+with `readonly: false` also take this legacy-only route: historical ROX PVs may
+have `spec.csi.readOnly: false`, while their legacy node enforces the access mode.
+The backend must classify
 the real path authoritatively and apply that allowlist atomically **before any
 attachment/adoption mutation**. Return HTTP 412 if the required route is excluded;
 never attach first and reject afterward or return a misleading legacy no-op.
@@ -196,6 +208,11 @@ routes. Node IDs are supplied by Kubernetes:
   This is a verified no-op: the existing ceph-csi plugin maps the volume. The
   controller returns an empty `publish_context`; it must not create a QEMU
   attachment for a historical Node name.
+- A legacy node alone does not authorize that no-op. The image must also be
+  authoritatively legacy and not adopted, with no active QEMU owner, pending
+  QEMU attachment/adoption intent, or recorded fence forbidding legacy access.
+  Native and adopted images must never return `legacy-krbd`, even for a legacy
+  node or a legacy-only allowlist. Reject an incompatible route before mutation.
 - New nodes identify the **exact VM incarnation**. Axo must match that immutable
   identity to the cluster, pool and hypervisor. It must never convert a name or
   IP address into a QEMU attachment target. Missing, stale, duplicated or
@@ -219,18 +236,25 @@ attached and the requested read-only policy is effective:
 }
 ```
 
-The node receives `device_serial`, `readonly` (`"true"` or `"false"`),
+The node receives the exact `node_id`, `device_serial`, `readonly` (`"true"` or `"false"`),
 `volume_mode`, `fs_type` for filesystems, and `format_policy`. It searches the
 actual device identity; no caller-provided `/dev/...` path is accepted. The
 controller rejects mismatched volume/VM identity, filesystem/mode/read-only
-policy or malformed serials.
+policy or malformed serials. Before device discovery, state mutation, mounting
+or publication, both `NodeStageVolume` and `NodePublishVolume` must require
+`publish_context.node_id` to equal the locally configured VM incarnation exactly.
+Missing or mismatched identity is a refusal, including for an idempotent retry.
+Missing or malformed `node_id` returns `INVALID_ARGUMENT`; a valid but different
+incarnation returns `FAILED_PRECONDITION` before any host operation.
+Kubernetes Node-name reuse must not make an old context valid on a replacement VM.
 
 This transport uses **QEMU `scsi-hd` over virtio-scsi**. `device_serial` is 1–36
 ASCII characters, matching `[A-Za-z0-9._-]{1,36}`. Axo must allocate a stable
 serial for the volume, ensure uniqueness among disks attached to the VM, and
-never assign it to another volume on the same incarnation while earlier CSI
-publish context could still be replayed. Current attachment uniqueness alone
-does not prevent stale-context reuse. Axo must
+durably bind the serial to the volume and exact VM incarnation. Never reuse a
+serial for a different volume on that incarnation, even after detach, reboot,
+or registry cleanup: earlier CSI publish context can still be replayed.
+Current attachment uniqueness alone does not prevent stale-context reuse. Axo must
 verify the serial exposed in the guest. Axo and the controller require the exact
 ASCII identifier: they never truncate, pad, change its case or derive it by
 shortening the opaque volume handle. The Node plugin may remove fixed-width
@@ -244,8 +268,9 @@ virtio-blk, whose 20-byte serial limit requires a separate transport contract.
 Volume handles keep their existing opaque format and are not subject to the
 serial character or length restrictions.
 
-Read-only requests must be enforced by QEMU/Axo. `SINGLE_NODE_READER_ONLY`
-requires `readonly: true`. For filesystems, the effective guest mount remains
+Read-only requests must be enforced by QEMU/Axo. On the QEMU path,
+`SINGLE_NODE_READER_ONLY` requires `readonly: true`; a false flag on a reader-only
+legacy request is not permission to use QEMU. For filesystems, the effective guest mount remains
 read-only when any of the attachment, stage options, access mode or publication
 requires it; a publication with `readonly: false` cannot relax an existing
 read-only stage. For raw Block, a read-only bind mount does not prevent writes
@@ -259,6 +284,8 @@ The minimum safe attachment transaction requires:
 1. Authoritative handle resolution and cluster ownership verification.
 2. A durable per-image ownership claim and monotonic fencing epoch, serialized
    against attach, detach, delete, clone and expand operations.
+   Another active incarnation owning the image causes a conflict; attach must
+   never evict or implicitly detach a valid live owner to satisfy a new request.
 3. Positive fencing of previous writers and stale work: verified device removal
    from the exact old VM, or confirmed isolation/destruction and appropriate
    Ceph session revocation/blocklisting. **An empty watcher/lock sample, a grace
@@ -266,6 +293,9 @@ The minimum safe attachment transaction requires:
    fence.** Old writers must be unable to reacquire the image. Existing exported
    Ceph credentials are part of this threat and must be accounted for before
    claiming isolation.
+   Fencing targets superseded work or an incarnation authoritatively retired by
+   the platform. Any Ceph revocation/blocklisting must identify the exact librbd
+   client/session, never a shared hypervisor IP that could affect other tenants.
 4. Backend checks for active Ceph users/locks as additional evidence, with all
    inspection failures treated as refusal. Never break a lock merely because a
    timeout elapsed; a verified old VM incarnation and its fence are required.
@@ -275,6 +305,16 @@ The minimum safe attachment transaction requires:
 An old completion carrying a revoked epoch must not resurrect an attachment.
 VM twins and uncertain old mappings must block attachment instead of risking
 concurrent writers. The controller does not implement these platform primitives.
+
+Platform VM retirement, including FORCE heal and scale-down, must durably record
+the retired incarnation and reconcile all its attachment intents and observed
+devices. Confirm destruction/isolation, revoke its exact Ceph sessions where
+needed, and release only locks proven to belong to that fenced incarnation.
+Persist and retry this cleanup across Axo/hypervisor restarts; an orphaned lock
+must not require an unsafe manual unlock or be treated as proof of absence.
+A replacement VM must not inherit the old owner, serial mapping or completion.
+Until retirement and cleanup are proven, refuse a new writer and report the
+operation as pending or failed, never fabricate successful detach.
 
 Unpublish accepts `node_id: null` to mean all attachments for the volume, as CSI
 requires when node_id is omitted. Axo must enumerate authoritative incarnations
@@ -306,8 +346,12 @@ be expanded without adoption or a transport change. A filesystem request with
 no `expected_shape.fs_type` leaves that field unspecified; an explicit filesystem
 must match the returned record. Legacy expansion records need not carry QEMU's
 `preformatted` policy. Never shrink a volume. An existing size satisfying
-the range returns success. First grow the RBD image, then every applicable QEMU
-block device, verify the observed capacity and persist completion. The CSI
+the range returns success only after all applicable attachment postconditions
+are also verified. First grow the RBD image, then every applicable QEMU
+block device, verify the observed capacity and persist completion. A retry after
+RBD growth but before QEMU `block_resize` must reconcile QEMU even when the image
+already satisfies the range; image size or a cached response is not completion.
+The CSI
 response requests Node expansion for both filesystems and raw Block: the guest
 may need a SCSI rescan even when no filesystem resize is needed.
 
@@ -363,3 +407,12 @@ Ceph credential isolation, preformat crash recovery without data loss, preserved
 legacy image/snapshot identity, exact-once adoption billing, snapshot restore
 and clone integrity, and monotonic online expansion including guest rescans.
 Run those tests with real Supernova and Ceph before an attachment takeover.
+
+Required failure scenarios include replaying an old node's publish context on a
+replacement VM with the same disk serial; attempting serial reuse after detach;
+requesting legacy routing for native/adopted images or images with pending QEMU
+ownership; attaching against a valid live owner; restarting during FORCE-heal
+cleanup without affecting another tenant's Ceph session; failing after RBD resize
+but before QEMU resize; and larger clones/restores mounted both writable and
+read-only. Each refusal must precede the forbidden effect, and retries must
+reconcile the original resource rather than allocate or fence an unrelated one.

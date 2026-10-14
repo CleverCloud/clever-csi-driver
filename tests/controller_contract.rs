@@ -387,6 +387,64 @@ async fn qemu_is_never_published_after_a_legacy_only_request() {
 }
 
 #[tokio::test]
+async fn reader_only_pvs_without_readonly_attachments_are_legacy_only() {
+    for mode in [2, 3] {
+        for fs in [Some("xfs"), None] {
+            let fixture = Fixture::new().await;
+            let mut request = publish();
+            request.node_id = "manual-nodegroup-node0".into();
+            request.volume_capability = Some(cap(fs));
+            request
+                .volume_capability
+                .as_mut()
+                .unwrap()
+                .access_mode
+                .as_mut()
+                .unwrap()
+                .mode = mode;
+            assert!(!request.readonly); // external-attacher uses PV spec.csi.readOnly
+            fixture.reply(StatusCode::OK, json!({"transport":"legacy-krbd"}));
+            let response = fixture
+                .controller
+                .controller_publish_volume(Request::new(request.clone()))
+                .await
+                .unwrap()
+                .into_inner();
+            assert!(response.publish_context.is_empty());
+
+            // Even a response matching the requested identity and shape must
+            // not let a backend bypass the allowlist and publish QEMU.
+            let mut invalid = attachment_record();
+            invalid["node_id"] = json!(request.node_id);
+            if fs.is_none() {
+                invalid["volume_mode"] = json!("block");
+                invalid.as_object_mut().unwrap().remove("fs_type");
+            }
+            fixture.reply(StatusCode::OK, invalid);
+            assert_eq!(
+                fixture
+                    .controller
+                    .controller_publish_volume(Request::new(request.clone()))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                Code::Unavailable
+            );
+            let calls = fixture.calls();
+            assert_eq!(calls.len(), 2);
+            for call in &calls {
+                assert_eq!(call.body["allowed_transports"], json!(["legacy-krbd"]));
+                assert_eq!(call.body["readonly"], false);
+                assert_eq!(call.body["node_id"], request.node_id);
+                assert_eq!(call.body["volume_context"], json!(request.volume_context));
+            }
+            assert_eq!(calls[0].body, calls[1].body);
+            assert_eq!(calls[0].key, calls[1].key);
+        }
+    }
+}
+
+#[tokio::test]
 async fn attachment_feature_is_mandatory_and_rechecked_before_each_mutation() {
     let fixture = Fixture::new().await;
     fixture.reply(StatusCode::OK, attachment_record());
@@ -430,16 +488,7 @@ async fn malformed_or_secret_attachment_metadata_never_reaches_http() {
     secret
         .volume_context
         .insert("userKey".into(), "not-forwarded".into());
-    let mut readonly = publish();
-    readonly
-        .volume_capability
-        .as_mut()
-        .unwrap()
-        .access_mode
-        .as_mut()
-        .unwrap()
-        .mode = 3;
-    for request in [malformed, secret, readonly] {
+    for request in [malformed, secret] {
         assert_eq!(
             fixture
                 .controller
@@ -932,15 +981,18 @@ async fn clone_and_restore_preserve_opaque_source_and_idempotent_create_name() {
 async fn attach_requires_completed_preformatted_identity_and_preserves_opaque_handles() {
     let fixture = Fixture::new().await;
     fixture.reply(StatusCode::OK, json!({"transport":"qemu", "volume_id":"0001-not-decoded/../../opaque", "node_id":"vm-incarnation-0123", "readonly":false, "device_serial":"csi-serial-42", "volume_mode":"filesystem", "fs_type":"xfs", "format_policy":"preformatted"}));
+    let mut request = publish();
+    request.secrets = HashMap::from([("userKey".into(), "legacy-cephx-secret".into())]);
     let response = fixture
         .controller
-        .controller_publish_volume(Request::new(publish()))
+        .controller_publish_volume(Request::new(request))
         .await
         .unwrap()
         .into_inner();
     assert_eq!(
         response.publish_context,
         HashMap::from([
+            ("node_id".into(), "vm-incarnation-0123".into()),
             ("device_serial".into(), "csi-serial-42".into()),
             ("volume_mode".into(), "filesystem".into()),
             ("fs_type".into(), "xfs".into()),
@@ -953,6 +1005,7 @@ async fn attach_requires_completed_preformatted_identity_and_preserves_opaque_ha
     assert_eq!(call.body["node_id"], "vm-incarnation-0123");
     assert!(!call.path.contains("opaque"));
     assert_eq!(call.body["volume_context"]["clusterID"], "legacy-ceph-id");
+    assert!(!call.body.to_string().contains("legacy-cephx-secret"));
 }
 
 #[tokio::test]
@@ -1036,6 +1089,7 @@ async fn block_attachment_omits_filesystem_metadata() {
         .unwrap()
         .into_inner();
     assert_eq!(response.publish_context["volume_mode"], "block");
+    assert_eq!(response.publish_context["node_id"], "vm-incarnation-0123");
     assert!(!response.publish_context.contains_key("fs_type"));
 }
 
@@ -1057,21 +1111,47 @@ async fn mismatched_filesystem_or_unformatted_attach_is_not_published() {
 }
 
 #[tokio::test]
-async fn stale_attachment_response_for_another_incarnation_is_rejected() {
-    let fixture = Fixture::new().await;
-    fixture.reply(StatusCode::OK, json!({
-        "transport":"qemu", "volume_id":"0001-not-decoded/../../opaque", "node_id":"old-destroyed-incarnation",
-        "readonly":false, "device_serial":"serial", "volume_mode":"filesystem", "fs_type":"xfs", "format_policy":"preformatted"
-    }));
-    assert_eq!(
-        fixture
+async fn stale_attachment_identity_or_unknown_transport_is_rejected() {
+    for (field, value) in [
+        ("node_id", "old-destroyed-incarnation"),
+        ("volume_id", "another-volume"),
+        ("transport", "unknown-transport"),
+    ] {
+        let fixture = Fixture::new().await;
+        let mut invalid = attachment_record();
+        invalid[field] = json!(value);
+        fixture.reply(StatusCode::OK, invalid);
+        assert_eq!(
+            fixture
+                .controller
+                .controller_publish_volume(Request::new(publish()))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::Unavailable,
+            "{field}={value}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn attachment_context_preserves_the_exact_target_incarnation() {
+    for node_id in ["VM-Incarnation:MixedCase/42".to_owned(), "n".repeat(256)] {
+        let fixture = Fixture::new().await;
+        let mut request = publish();
+        request.node_id = node_id.clone();
+        let mut record = attachment_record();
+        record["node_id"] = json!(node_id);
+        fixture.reply(StatusCode::OK, record);
+        let response = fixture
             .controller
-            .controller_publish_volume(Request::new(publish()))
+            .controller_publish_volume(Request::new(request))
             .await
-            .unwrap_err()
-            .code(),
-        Code::Unavailable
-    );
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.publish_context["node_id"], node_id);
+        assert_eq!(fixture.calls()[0].body["node_id"], node_id);
+    }
 }
 
 #[tokio::test]
@@ -1439,7 +1519,8 @@ async fn readonly_attachment_is_enforced_by_backend_and_publish_context() {
         .into_inner();
     assert_eq!(response.publish_context["readonly"], "true");
     assert_eq!(fixture.calls()[0].body["readonly"], true);
-    request.readonly = false;
+    // A backend must not claim a writable attachment for a readonly request.
+    fixture.reply(StatusCode::OK, attachment_record());
     assert_eq!(
         fixture
             .controller
@@ -1447,9 +1528,12 @@ async fn readonly_attachment_is_enforced_by_backend_and_publish_context() {
             .await
             .unwrap_err()
             .code(),
-        Code::InvalidArgument
+        Code::Unavailable
     );
-    assert_eq!(fixture.calls().len(), 1);
+    let calls = fixture.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].body, calls[1].body);
+    assert_eq!(calls[0].key, calls[1].key);
 }
 
 #[tokio::test]

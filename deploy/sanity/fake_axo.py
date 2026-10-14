@@ -176,20 +176,26 @@ def expand(body):
         raise ApiError(409, "clever.csi.incompatible-resource")
     req = body["required_bytes"]
     lim = body.get("limit_bytes")
+    if lim is not None and max(req, vol["capacity"]) > lim:
+        raise ApiError(422, "clever.csi.out-of-range")
     if vol["capacity"] < req:
-        if lim is not None and req > lim:
-            raise ApiError(422, "clever.csi.out-of-range")
         os.truncate(backing(vol["id"]), req)
         vol["capacity"] = req
-        if vol["attach"] is not None:
-            run("losetup", "--set-capacity", vol["attach"]["loop"])
+    # Backing growth can complete before the attached device refresh fails.
+    # Every retry must reconcile and observe the device, even if the recorded
+    # backing capacity already satisfies this request.
+    if vol["attach"] is not None:
+        loop = vol["attach"]["loop"]
+        run("losetup", "--set-capacity", loop)
+        if int(run("blockdev", "--getsize64", loop)) < vol["capacity"]:
+            raise RuntimeError("attached device has not observed the expanded capacity")
     return record(vol)
 
 
 def plug(vol, readonly):
     STATE["slot"] += 1
     name = f"sdz{STATE['slot']}"
-    serial = f"cc-{vol['id'][4:20]}"
+    serial = f"cc-{vol['id'][4:]}"
     args = ["losetup", "--find", "--show"]
     if readonly:
         args.append("--read-only")

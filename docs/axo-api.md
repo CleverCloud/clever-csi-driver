@@ -183,14 +183,20 @@ snapshots and clones; the handle becomes unusable and billing changes durably.
 Ensure-volume compatibility includes source, shape, policy and capacity range.
 Validate source ownership/readiness before copying, never truncate source data,
 and preserve clone dependencies. Returned capacity fits the requested range
-after backend rounding. For new filesystem clones/restores, initialization and
-necessary filesystem growth finish before attachment eligibility.
+after backend rounding. Writable NodeStage grows an existing filesystem to the
+guest device capacity before success, including a new clone/restore PVC whose
+size does not trigger NodeExpandVolume. Read-only stage cannot grow a filesystem:
+Axo must complete and verify necessary clone/restore filesystem growth to the
+requested capacity before read-only attachment eligibility. Image growth alone
+is insufficient. Use exclusive maintenance ownership and preserve source data.
 
 **The Node plugin never runs mkfs.** Axo initializes only newly allocated images
 under exclusive durable ownership. Interrupted initialization reconciles the
 recorded image and filesystem; retries must not blindly reformat. Adopted images,
-including blank or ambiguous images, are never formatted. Unsupported filesystems,
-encryption and uncertain identity cause refusal. `PREFORMATTED` means the
+including blank or ambiguous images, are never formatted. Unsupported filesystems
+and encryption cause refusal on new provisioning/QEMU paths; verified legacy
+attachments retain their established capabilities. Uncertain identity always
+causes refusal. `PREFORMATTED` means the
 initialization policy completed; Block volumes remain raw.
 
 `resolve` returns verified actual shape whenever it is determinable, even if it
@@ -209,6 +215,18 @@ including guest rescans and filesystem growth where applicable.
 
 ## Attachment identity and fencing
 
+Every ensure request includes nonempty `allowedTransports`. The client verifies
+the required `ATTACHMENT_ALLOWED_TRANSPORTS` capability before each attachment
+request within its deadline. Axo authoritatively classifies the route and checks
+the allowlist atomically before attachment, adoption or ownership mutation.
+An excluded route returns HTTP 412 (`transport-not-allowed`), never a false
+legacy no-op. QEMU-compatible requests allow `["LEGACY_KRBD", "QEMU"]`;
+unsupported QEMU modes/filesystems/options, encryption, alternative mounters or
+reader-only capabilities with `readonly: false` allow only `["LEGACY_KRBD"]`.
+Legacy metadata is preserved for authoritative validation rather than rejected
+by QEMU policy before classification. Structural checks and secret refusal
+apply to both routes.
+
 The flat record includes `volumeId`, `nodeId`, `transport`, `device`,
 `generation`, `readonly`, shape and initialization policy. Validate combinations:
 
@@ -219,6 +237,10 @@ The flat record includes `volumeId`, `nodeId`, `transport`, `device`,
   with no QEMU attachment or pending claim and no recorded fence forbidding
   return to legacy access. Native or adopted volumes cannot take this shortcut.
   It authorizes no QEMU attachment; the old plugin receives empty publish context.
+- Legacy shape is not restricted to XFS/ext4 or `PREFORMATTED`; it describes the
+  existing image without authorizing reformatting or QEMU attachment. A missing
+  filesystem in an existing-volume request means unspecified. QEMU retains its
+  XFS/ext4, initialization and read-only requirements.
 - Returned identities, shape and read-only policy match the request. QEMU
   success requires observed attachment and durable completion, not AMQP enqueue.
 
@@ -228,8 +250,9 @@ record. Completed detach/fence followed by attachment creates a new generation.
 Retain enough history to distinguish retired/fenced incarnations from unknown
 or ambiguous identities during cleanup.
 
-The serial remains stable for the volume. **Never reassign it to a different
-volume on the same incarnation while an old publish context could be replayed.**
+The serial remains stable for the volume and is durably bound to its exact VM
+incarnation. **Never reassign it to a different volume on that incarnation**,
+including after detach, reboot or cleanup, because old publish context can replay.
 Current uniqueness alone is insufficient: Node discovers by serial and cannot
 use an API-only generation to detect reuse. Never truncate, case-fold or derive
 the serial by shortening the volume handle. Node may remove transport padding
@@ -253,12 +276,26 @@ request must not evict a valid owner or implicitly detach it. Fencing during
 handoff addresses superseded work or an incarnation authoritatively retired by
 the platform. It is not permission to destroy a live writer to satisfy a request.
 
+Retirement, including FORCE heal and scale-down, must durably reconcile every
+attachment intent and device belonging to the retired incarnation. Confirm
+destruction/isolation and revoke the exact librbd client/session where needed;
+never blocklist a shared hypervisor IP. Release only locks proven to belong to
+that fenced incarnation. Persist cleanup across restarts and retry it until
+completed; uncertainty blocks a new writer. A replacement must not inherit old
+ownership or complete an operation for the retired incarnation.
+
 Backend enforcement is mandatory for read-only attachment. Filesystem publication
 cannot relax a read-only constraint. Raw Block read-only publication also needs
 Linux block protection (`blockdev --getro` equals `1`); bind flags alone are
 insufficient. Never toggle a shared writable device globally read-only for one
-pod. Node publish-context keys stay `device_serial`, `readonly`, `volume_mode`,
-`fs_type`, `format_policy`; API camelCase does not rename this cached CSI interface.
+pod. Node publish-context keys are `node_id`, `device_serial`, `readonly`,
+`volume_mode`, `fs_type`, `format_policy`; API camelCase does not rename this
+cached CSI interface. The controller copies validated `nodeId` into `node_id`.
+NodeStage and NodePublish, including retries, require it to equal the locally
+configured incarnation before discovery, state changes or mount/publication.
+Missing or different identity must fail even when Kubernetes reused a Node name.
+Missing/malformed `node_id` maps to `INVALID_ARGUMENT`; a different valid
+incarnation maps to `FAILED_PRECONDITION`, before any host operation.
 
 ## Snapshots and pagination
 
@@ -306,7 +343,8 @@ segment. Version dispatch needs integration in these handlers; it is not automat
 
 Capabilities publish effective `contractVersion`, `minContractVersion`,
 `formatPolicy`, `features.core`, `features.optional` and limits. Core covers
-ensure/resolve/delete volume and ensure/delete/read-only attachment. Expansion,
+ensure/resolve/delete volume and ensure/delete/read-only attachment plus the
+mandatory `ATTACHMENT_ALLOWED_TRANSPORTS` enforcement guarantee. Expansion,
 snapshots, cloning, restoration, legacy routing and additional inventories are
 advertised separately. Snapshot restoration depends on snapshot support.
 Features gate operations, not alternative JSON meanings or new enum values
@@ -319,7 +357,9 @@ workloads. Readiness cannot silently discard rollout requirements as optional.
 Freeze a coherent feature set per controller instance; incompatible changes need
 controlled reconfiguration or restart.
 
-Static contract data can be cached. `ready`, `checkedAt` and `unreadyReasons`
+Static contract data can be cached, but the attachment transport guard is checked
+against capabilities before every attach to detect an incompatible backend change.
+`ready`, `checkedAt` and `unreadyReasons`
 come from a backend health cache at most ten seconds old, without synchronous
 deep probing. Do not serve them indefinitely from HTTP caches. Size request
 limits for replicas and rolling upgrades; 429 must not extend old healthy state
@@ -334,6 +374,12 @@ codes never imply success. HTTP 401/403 retain their authentication/authorizatio
 meaning. A known code with an incompatible HTTP status is `DATA_LOSS`, not a
 negative successful validation or empty list. Do not forward human server
 messages or arbitrary context into Kubernetes errors.
+
+Malformed or inconsistent 2xx mutation bodies map to retryable `UNAVAILABLE`:
+the side effect may already exist, so retry with the same reconciliation identity
+instead of deleting the resource or issuing a new identity. Malformed read
+responses remain `DATA_LOSS`. The distinction also covers response size, identity,
+shape, read-only policy and capacity checks.
 
 ## Client migration
 
@@ -350,6 +396,12 @@ proposal requires a separate coordinated client/backend change:
   within the existing gRPC deadline.
 - Apply error mappings in RPC context, including negative successful capability
   validation and expansion's incompatible-shape error.
+- Preserve the v1 pre-mutation transport allowlist as required `allowedTransports`
+  and require `ATTACHMENT_ALLOWED_TRANSPORTS` before attach. Keep legacy shape and
+  metadata permissive until authoritative routing; do not reintroduce global
+  encryption/RWX rejection or force legacy records to `PREFORMATTED`/XFS/ext4.
+- Preserve retryable `UNAVAILABLE` for invalid mutation successes, `DATA_LOSS`
+  for malformed reads, and exact incarnation binding in QEMU publish context.
 - Rewrite HTTP fixtures; exercise revision compatibility, frontend encoding,
   cancellation, mixed pools and failure paths.
 
@@ -368,9 +420,14 @@ Release acceptance additionally requires:
 - Crash/retry convergence, competing-operation serialization, stale-worker
   rejection and positive writer fencing with real Ceph/QEMU.
 - Serial/generation persistence through reboot and migration, with no reassignment
-  capable of misdirecting cached publish context.
+  capable of misdirecting cached publish context; reject replay on a replacement
+  incarnation before host operations even if its disk has the same serial.
+- Reject legacy shortcuts for native/adopted images or pending QEMU ownership;
+  preserve valid active owners and recover FORCE-retirement cleanup across
+  restarts without fencing another tenant's Ceph session.
 - Safe initialization recovery, lossless adoption, exactly-once billing
-  transitions, clone/restore integrity and coordinated growth.
+  transitions, larger clone/restore integrity in writable and read-only use,
+  and recovery after image resize succeeds but QEMU resize fails.
 - Snapshot failures before/after cut, dynamic/preprovisioned polling, explicit
   cleanup and preservation of dependents.
 - Version and feature combinations, middleware errors, bounded waiting,
