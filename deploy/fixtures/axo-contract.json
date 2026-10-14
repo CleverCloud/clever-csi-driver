@@ -1,0 +1,2535 @@
+[
+  {
+    "label": "KubernetesVolumeId valid length 1",
+    "schema": "KubernetesVolumeId",
+    "value": "a",
+    "valid": true
+  },
+  {
+    "label": "KubernetesVolumeId valid length 13",
+    "schema": "KubernetesVolumeId",
+    "value": "Native_01.Z-9",
+    "valid": true
+  },
+  {
+    "label": "KubernetesVolumeId valid length 128",
+    "schema": "KubernetesVolumeId",
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": true
+  },
+  {
+    "label": "KubernetesVolumeId valid length 1024",
+    "schema": "KubernetesVolumeId",
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": true
+  },
+  {
+    "label": "KubernetesVolumeId reject ''",
+    "schema": "KubernetesVolumeId",
+    "value": "",
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeId reject 'aaaaaaaaaaaaaaaaaaaaaaaaa'",
+    "schema": "KubernetesVolumeId",
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeId reject 'a/b'",
+    "schema": "KubernetesVolumeId",
+    "value": "a/b",
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeId reject 'a b'",
+    "schema": "KubernetesVolumeId",
+    "value": "a b",
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeId reject 'a@b'",
+    "schema": "KubernetesVolumeId",
+    "value": "a@b",
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeId reject '_a'",
+    "schema": "KubernetesVolumeId",
+    "value": "_a",
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeId reject 'a\\n'",
+    "schema": "KubernetesVolumeId",
+    "value": "a\n",
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeId reject 'a\\r'",
+    "schema": "KubernetesVolumeId",
+    "value": "a\r",
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeId reject 'a\\r\\n'",
+    "schema": "KubernetesVolumeId",
+    "value": "a\r\n",
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeId reject 'é'",
+    "schema": "KubernetesVolumeId",
+    "value": "é",
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshotId valid length 1",
+    "schema": "KubernetesSnapshotId",
+    "value": "a",
+    "valid": true
+  },
+  {
+    "label": "KubernetesSnapshotId valid length 13",
+    "schema": "KubernetesSnapshotId",
+    "value": "Native_01.Z-9",
+    "valid": true
+  },
+  {
+    "label": "KubernetesSnapshotId valid length 128",
+    "schema": "KubernetesSnapshotId",
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": true
+  },
+  {
+    "label": "KubernetesSnapshotId valid length 1024",
+    "schema": "KubernetesSnapshotId",
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": true
+  },
+  {
+    "label": "KubernetesSnapshotId reject ''",
+    "schema": "KubernetesSnapshotId",
+    "value": "",
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshotId reject 'aaaaaaaaaaaaaaaaaaaaaaaaa'",
+    "schema": "KubernetesSnapshotId",
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshotId reject 'a/b'",
+    "schema": "KubernetesSnapshotId",
+    "value": "a/b",
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshotId reject 'a b'",
+    "schema": "KubernetesSnapshotId",
+    "value": "a b",
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshotId reject 'a@b'",
+    "schema": "KubernetesSnapshotId",
+    "value": "a@b",
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshotId reject '_a'",
+    "schema": "KubernetesSnapshotId",
+    "value": "_a",
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshotId reject 'a\\n'",
+    "schema": "KubernetesSnapshotId",
+    "value": "a\n",
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshotId reject 'a\\r'",
+    "schema": "KubernetesSnapshotId",
+    "value": "a\r",
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshotId reject 'a\\r\\n'",
+    "schema": "KubernetesSnapshotId",
+    "value": "a\r\n",
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshotId reject 'é'",
+    "schema": "KubernetesSnapshotId",
+    "value": "é",
+    "valid": false
+  },
+  {
+    "label": "node valid 'vm:Incarnation_42'",
+    "schema": "KubernetesNodeId",
+    "value": "vm:Incarnation_42",
+    "valid": true
+  },
+  {
+    "label": "node valid 'UpperCase-VM'",
+    "schema": "KubernetesNodeId",
+    "value": "UpperCase-VM",
+    "valid": true
+  },
+  {
+    "label": "node valid 'vm/incarnation'",
+    "schema": "KubernetesNodeId",
+    "value": "vm/incarnation",
+    "valid": true
+  },
+  {
+    "label": "node valid 'éééééééééééééééééééé'",
+    "schema": "KubernetesNodeId",
+    "value": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+    "valid": true
+  },
+  {
+    "label": "node reject ''",
+    "schema": "KubernetesNodeId",
+    "value": "",
+    "valid": false
+  },
+  {
+    "label": "node reject 'a b'",
+    "schema": "KubernetesNodeId",
+    "value": "a b",
+    "valid": false
+  },
+  {
+    "label": "node reject 'a\\t'",
+    "schema": "KubernetesNodeId",
+    "value": "a\t",
+    "valid": false
+  },
+  {
+    "label": "node reject 'a\\n'",
+    "schema": "KubernetesNodeId",
+    "value": "a\n",
+    "valid": false
+  },
+  {
+    "label": "node reject 'a\\r\\n'",
+    "schema": "KubernetesNodeId",
+    "value": "a\r\n",
+    "valid": false
+  },
+  {
+    "label": "node reject 'a\\x00'",
+    "schema": "KubernetesNodeId",
+    "value": "a\u0000",
+    "valid": false
+  },
+  {
+    "label": "node reject 'aaaaaaaaaaaaaaaaaaaa'",
+    "schema": "KubernetesNodeId",
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": false
+  },
+  {
+    "label": "node reject 'éééééééééééééééééééé'",
+    "schema": "KubernetesNodeId",
+    "value": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+    "valid": false
+  },
+  {
+    "label": "name ' ordinary Unicode é '",
+    "schema": "KubernetesCsiName",
+    "value": " ordinary Unicode é ",
+    "valid": true
+  },
+  {
+    "label": "name 'name\\twith\\nwhitespace'",
+    "schema": "KubernetesCsiName",
+    "value": "name\twith\nwhitespace",
+    "valid": true
+  },
+  {
+    "label": "name 'aaaaaaaaaaaaaaaaaaaaaaaaa'",
+    "schema": "KubernetesCsiName",
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": true
+  },
+  {
+    "label": "name reject ''",
+    "schema": "KubernetesCsiName",
+    "value": "",
+    "valid": false
+  },
+  {
+    "label": "name reject 'a\\x00'",
+    "schema": "KubernetesCsiName",
+    "value": "a\u0000",
+    "valid": false
+  },
+  {
+    "label": "name reject 'a\\x7f'",
+    "schema": "KubernetesCsiName",
+    "value": "a",
+    "valid": false
+  },
+  {
+    "label": "name reject 'a\\x85'",
+    "schema": "KubernetesCsiName",
+    "value": "a",
+    "valid": false
+  },
+  {
+    "label": "name reject 'aaaaaaaaaaaaaaaaaaaaaaaaa'",
+    "schema": "KubernetesCsiName",
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": false
+  },
+  {
+    "label": "name reject 'ééééééééééééééééééééééééé'",
+    "schema": "KubernetesCsiName",
+    "value": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+    "valid": false
+  },
+  {
+    "label": "timestamp 2026-10-13T12:34:56.123456789Z",
+    "schema": "KubernetesCsiTimestamp",
+    "value": "2026-10-13T12:34:56.123456789Z",
+    "valid": true
+  },
+  {
+    "label": "timestamp 2026-10-13T12:34:56Z",
+    "schema": "KubernetesCsiTimestamp",
+    "value": "2026-10-13T12:34:56Z",
+    "valid": true
+  },
+  {
+    "label": "timestamp reject 2026-10-13T12:34:56.123456789Z\n",
+    "schema": "KubernetesCsiTimestamp",
+    "value": "2026-10-13T12:34:56.123456789Z\n",
+    "valid": false
+  },
+  {
+    "label": "timestamp reject 2026-10-13T12:34:56.1234567890Z",
+    "schema": "KubernetesCsiTimestamp",
+    "value": "2026-10-13T12:34:56.1234567890Z",
+    "valid": false
+  },
+  {
+    "label": "timestamp reject 2026-02-30T12:34:56Z",
+    "schema": "KubernetesCsiTimestamp",
+    "value": "2026-02-30T12:34:56Z",
+    "valid": false
+  },
+  {
+    "label": "timestamp reject 2026-10-13T12:34:56+01:00",
+    "schema": "KubernetesCsiTimestamp",
+    "value": "2026-10-13T12:34:56+01:00",
+    "valid": false
+  },
+  {
+    "label": "KubernetesCsiDevice valid",
+    "schema": "KubernetesCsiDevice",
+    "value": {
+      "bus": "VIRTIO_SCSI",
+      "serial": "disk_1.-ABC"
+    },
+    "valid": true
+  },
+  {
+    "label": "device unsupported bus",
+    "schema": "KubernetesCsiDevice",
+    "value": {
+      "bus": "VIRTIO_BLK",
+      "serial": "disk_1.-ABC"
+    },
+    "valid": false
+  },
+  {
+    "label": "serial empty",
+    "schema": "KubernetesCsiDevice",
+    "value": {
+      "bus": "VIRTIO_SCSI",
+      "serial": ""
+    },
+    "valid": false
+  },
+  {
+    "label": "serial long",
+    "schema": "KubernetesCsiDevice",
+    "value": {
+      "bus": "VIRTIO_SCSI",
+      "serial": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
+    "label": "serial newline",
+    "schema": "KubernetesCsiDevice",
+    "value": {
+      "bus": "VIRTIO_SCSI",
+      "serial": "disk\n"
+    },
+    "valid": false
+  },
+  {
+    "label": "serial trailing space",
+    "schema": "KubernetesCsiDevice",
+    "value": {
+      "bus": "VIRTIO_SCSI",
+      "serial": "disk "
+    },
+    "valid": false
+  },
+  {
+    "label": "serial unicode",
+    "schema": "KubernetesCsiDevice",
+    "value": {
+      "bus": "VIRTIO_SCSI",
+      "serial": "disqué"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesCsiDevice missing bus",
+    "schema": "KubernetesCsiDevice",
+    "value": {
+      "serial": "disk_1.-ABC"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesCsiDevice missing serial",
+    "schema": "KubernetesCsiDevice",
+    "value": {
+      "bus": "VIRTIO_SCSI"
+    },
+    "valid": false
+  },
+  {
+    "label": "serial 36 accepted",
+    "schema": "KubernetesCsiDevice",
+    "value": {
+      "bus": "VIRTIO_SCSI",
+      "serial": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true
+  },
+  {
+    "label": "KubernetesReadyAttachment valid",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": true
+  },
+  {
+    "label": "QEMU device null",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": null,
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "legacy device present",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "LEGACY_KRBD",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "unknown transport",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "UNKNOWN",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "generation zero",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 0,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "readonly string",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": "false",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "FS fsType null",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": null,
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "BLOCK fsType present",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "BLOCK",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "attachment unobserved POST",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHING",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "attached timestamp absent",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": null
+    },
+    "valid": false
+  },
+  {
+    "label": "bad initialization",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "AUTOFORMAT",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesReadyAttachment missing volumeId",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesReadyAttachment missing nodeId",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesReadyAttachment missing transport",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesReadyAttachment missing device",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesReadyAttachment missing generation",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesReadyAttachment missing readonly",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesReadyAttachment missing volumeMode",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesReadyAttachment missing fsType",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesReadyAttachment missing formatPolicy",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesReadyAttachment missing status",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesReadyAttachment missing attachedAt",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED"
+    },
+    "valid": false
+  },
+  {
+    "label": "legacy verified shape",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "LEGACY_KRBD",
+      "device": null,
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": true
+  },
+  {
+    "label": "raw RW",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "BLOCK",
+      "fsType": null,
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": true
+  },
+  {
+    "label": "raw backend RO",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": true,
+      "volumeMode": "BLOCK",
+      "fsType": null,
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": true
+  },
+  {
+    "label": "GET pending attachment",
+    "schema": "KubernetesVolumeAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHING",
+      "attachedAt": null
+    },
+    "valid": true
+  },
+  {
+    "label": "response additive fields",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC",
+        "futureProperty": "allowed"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z",
+      "futureField": "allowed"
+    },
+    "valid": true
+  },
+  {
+    "label": "KubernetesSnapshot valid",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": true
+  },
+  {
+    "label": "snapshot before cut",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "CREATING",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "READY false",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": false,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "READY failureCause",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": {
+        "apiRequestId": "request_test",
+        "code": "clever.kubernetes.snapshot-failed",
+        "context": {
+          "type": "empty"
+        },
+        "error": "Sanitized failure"
+      }
+    },
+    "valid": false
+  },
+  {
+    "label": "PROCESSING true",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "PROCESSING",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "FAILED true",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "FAILED",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": {
+        "apiRequestId": "request_test",
+        "code": "clever.kubernetes.snapshot-failed",
+        "context": {
+          "type": "empty"
+        },
+        "error": "Sanitized failure"
+      }
+    },
+    "valid": false
+  },
+  {
+    "label": "FAILED no failure",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "FAILED",
+      "readyToUse": false,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "PROCESSING diagnostic",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "PROCESSING",
+      "readyToUse": false,
+      "provenance": "NATIVE",
+      "failureCause": {
+        "apiRequestId": "request_test",
+        "code": "clever.kubernetes.snapshot-failed",
+        "context": {
+          "type": "empty"
+        },
+        "error": "Sanitized failure"
+      }
+    },
+    "valid": false
+  },
+  {
+    "label": "native id too long",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "native name bytes too long",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshot missing id",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshot missing clusterId",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshot missing name",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshot missing sourceVolumeId",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshot missing sizeBytes",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshot missing creationDate",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshot missing status",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshot missing readyToUse",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshot missing provenance",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "failureCause": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshot missing failureCause",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "NATIVE"
+    },
+    "valid": false
+  },
+  {
+    "label": "retained FAILED GET",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "FAILED",
+      "readyToUse": false,
+      "provenance": "NATIVE",
+      "failureCause": {
+        "apiRequestId": "request_test",
+        "code": "clever.kubernetes.snapshot-failed",
+        "context": {
+          "type": "empty"
+        },
+        "error": "Sanitized failure"
+      }
+    },
+    "valid": true
+  },
+  {
+    "label": "retained FAILED POST rejected",
+    "schema": "KubernetesEnsuredSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "FAILED",
+      "readyToUse": false,
+      "provenance": "NATIVE",
+      "failureCause": {
+        "apiRequestId": "request_test",
+        "code": "clever.kubernetes.snapshot-failed",
+        "context": {
+          "type": "empty"
+        },
+        "error": "Sanitized failure"
+      }
+    },
+    "valid": false
+  },
+  {
+    "label": "PROCESSING POST allowed",
+    "schema": "KubernetesEnsuredSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "PROCESSING",
+      "readyToUse": false,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": true
+  },
+  {
+    "label": "READY POST allowed",
+    "schema": "KubernetesEnsuredSnapshot",
+    "value": {
+      "id": "snapshot-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "snapshot-name",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "NATIVE",
+      "failureCause": null
+    },
+    "valid": true
+  },
+  {
+    "label": "legacy larger handle/name",
+    "schema": "KubernetesSnapshot",
+    "value": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "clusterId": "kubernetes_cluster",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sourceVolumeId": "vol-1",
+      "sizeBytes": 1024,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "status": "READY",
+      "readyToUse": true,
+      "provenance": "LEGACY",
+      "failureCause": null
+    },
+    "valid": true
+  },
+  {
+    "label": "KubernetesResourceDeleteOutcome valid",
+    "schema": "KubernetesResourceDeleteOutcome",
+    "value": {
+      "outcome": "DELETED",
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "detachedNodeIds": [],
+      "operationId": null
+    },
+    "valid": true
+  },
+  {
+    "label": "resource cannot DETACH",
+    "schema": "KubernetesResourceDeleteOutcome",
+    "value": {
+      "outcome": "DETACHED",
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "detachedNodeIds": [],
+      "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "resource cannot LEGACY_NOOP",
+    "schema": "KubernetesResourceDeleteOutcome",
+    "value": {
+      "outcome": "LEGACY_NOOP",
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "detachedNodeIds": [],
+      "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "resource deletion nodeId",
+    "schema": "KubernetesResourceDeleteOutcome",
+    "value": {
+      "outcome": "DELETED",
+      "resourceId": "vol-1",
+      "nodeId": "vm-1",
+      "detachedNodeIds": [],
+      "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "resource deletion detached nodes",
+    "schema": "KubernetesResourceDeleteOutcome",
+    "value": {
+      "outcome": "DELETED",
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "detachedNodeIds": [
+        "vm-1"
+      ],
+      "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesResourceDeleteOutcome missing outcome",
+    "schema": "KubernetesResourceDeleteOutcome",
+    "value": {
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "detachedNodeIds": [],
+      "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesResourceDeleteOutcome missing resourceId",
+    "schema": "KubernetesResourceDeleteOutcome",
+    "value": {
+      "outcome": "DELETED",
+      "nodeId": null,
+      "detachedNodeIds": [],
+      "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesResourceDeleteOutcome missing nodeId",
+    "schema": "KubernetesResourceDeleteOutcome",
+    "value": {
+      "outcome": "DELETED",
+      "resourceId": "vol-1",
+      "detachedNodeIds": [],
+      "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesResourceDeleteOutcome missing detachedNodeIds",
+    "schema": "KubernetesResourceDeleteOutcome",
+    "value": {
+      "outcome": "DELETED",
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesResourceDeleteOutcome missing operationId",
+    "schema": "KubernetesResourceDeleteOutcome",
+    "value": {
+      "outcome": "DELETED",
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "detachedNodeIds": []
+    },
+    "valid": false
+  },
+  {
+    "label": "resource ALREADY_ABSENT",
+    "schema": "KubernetesResourceDeleteOutcome",
+    "value": {
+      "outcome": "ALREADY_ABSENT",
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "detachedNodeIds": [],
+      "operationId": null
+    },
+    "valid": true
+  },
+  {
+    "label": "detach one",
+    "schema": "KubernetesDetachOutcome",
+    "value": {
+      "outcome": "DETACHED",
+      "resourceId": "vol-1",
+      "nodeId": "vm-1",
+      "detachedNodeIds": [
+        "vm-1"
+      ],
+      "operationId": null
+    },
+    "valid": true
+  },
+  {
+    "label": "detach all",
+    "schema": "KubernetesDetachOutcome",
+    "value": {
+      "outcome": "DETACHED",
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "detachedNodeIds": [
+        "vm-1",
+        "vm-2"
+      ],
+      "operationId": null
+    },
+    "valid": true
+  },
+  {
+    "label": "legacy noop",
+    "schema": "KubernetesDetachOutcome",
+    "value": {
+      "outcome": "LEGACY_NOOP",
+      "resourceId": "vol-1",
+      "nodeId": "legacy-node",
+      "detachedNodeIds": [],
+      "operationId": null
+    },
+    "valid": true
+  },
+  {
+    "label": "detach does not delete",
+    "schema": "KubernetesDetachOutcome",
+    "value": {
+      "outcome": "DELETED",
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "detachedNodeIds": [],
+      "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "absent cannot claim detached nodes",
+    "schema": "KubernetesDetachOutcome",
+    "value": {
+      "outcome": "ALREADY_ABSENT",
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "detachedNodeIds": [
+        "vm-1"
+      ],
+      "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "detach nodes unique",
+    "schema": "KubernetesDetachOutcome",
+    "value": {
+      "outcome": "DETACHED",
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "detachedNodeIds": [
+        "vm-1",
+        "vm-1"
+      ],
+      "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeAttachmentEnsure valid",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
+    },
+    "valid": true
+  },
+  {
+    "label": "attachment unknown request field",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {},
+      "unknown": 1,
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "readonly wrong type",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": 0,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "fs request null",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": null,
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "block request fs",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "BLOCK",
+      "fsType": "XFS",
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeAttachmentEnsure missing nodeId",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeAttachmentEnsure missing readonly",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeAttachmentEnsure missing volumeMode",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "fsType": "XFS",
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeAttachmentEnsure missing fsType",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeAttachmentEnsure missing volumeContext",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "native volume",
+    "schema": "KubernetesReadyVolume",
+    "value": {
+      "id": "volume-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "volume-name",
+      "status": "AVAILABLE",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "capacityBytes": 1024,
+      "formatPolicy": "PREFORMATTED",
+      "source": null,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "provenance": "NATIVE",
+      "adopted": true
+    },
+    "valid": true
+  },
+  {
+    "label": "volume not ready",
+    "schema": "KubernetesReadyVolume",
+    "value": {
+      "id": "volume-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "volume-name",
+      "status": "CREATING",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "capacityBytes": 1024,
+      "formatPolicy": "PREFORMATTED",
+      "source": null,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "provenance": "NATIVE",
+      "adopted": true
+    },
+    "valid": false
+  },
+  {
+    "label": "native ID long",
+    "schema": "KubernetesReadyVolume",
+    "value": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "clusterId": "kubernetes_cluster",
+      "name": "volume-name",
+      "status": "AVAILABLE",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "capacityBytes": 1024,
+      "formatPolicy": "PREFORMATTED",
+      "source": null,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "provenance": "NATIVE",
+      "adopted": true
+    },
+    "valid": false
+  },
+  {
+    "label": "native name UTF8 long",
+    "schema": "KubernetesReadyVolume",
+    "value": {
+      "id": "volume-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "status": "AVAILABLE",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "capacityBytes": 1024,
+      "formatPolicy": "PREFORMATTED",
+      "source": null,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "provenance": "NATIVE",
+      "adopted": true
+    },
+    "valid": false
+  },
+  {
+    "label": "legacy volume long handle",
+    "schema": "KubernetesVolume",
+    "value": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "clusterId": "kubernetes_cluster",
+      "name": null,
+      "status": "AVAILABLE",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "capacityBytes": 1024,
+      "formatPolicy": "PREFORMATTED",
+      "source": null,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "provenance": "LEGACY",
+      "adopted": false
+    },
+    "valid": true
+  },
+  {
+    "label": "KubernetesSnapshotPage cursor128",
+    "schema": "KubernetesSnapshotPage",
+    "value": {
+      "items": [
+        {
+          "id": "snapshot-1",
+          "clusterId": "kubernetes_cluster",
+          "name": "snapshot-name",
+          "sourceVolumeId": "vol-1",
+          "sizeBytes": 1024,
+          "creationDate": "2026-10-13T12:34:56.123456789Z",
+          "status": "READY",
+          "readyToUse": true,
+          "provenance": "NATIVE",
+          "failureCause": null
+        }
+      ],
+      "nextCursor": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true
+  },
+  {
+    "label": "KubernetesSnapshotPage cursor129",
+    "schema": "KubernetesSnapshotPage",
+    "value": {
+      "items": [
+        {
+          "id": "snapshot-1",
+          "clusterId": "kubernetes_cluster",
+          "name": "snapshot-name",
+          "sourceVolumeId": "vol-1",
+          "sizeBytes": 1024,
+          "creationDate": "2026-10-13T12:34:56.123456789Z",
+          "status": "READY",
+          "readyToUse": true,
+          "provenance": "NATIVE",
+          "failureCause": null
+        }
+      ],
+      "nextCursor": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesSnapshotPage newline cursor",
+    "schema": "KubernetesSnapshotPage",
+    "value": {
+      "items": [
+        {
+          "id": "snapshot-1",
+          "clusterId": "kubernetes_cluster",
+          "name": "snapshot-name",
+          "sourceVolumeId": "vol-1",
+          "sizeBytes": 1024,
+          "creationDate": "2026-10-13T12:34:56.123456789Z",
+          "status": "READY",
+          "readyToUse": true,
+          "provenance": "NATIVE",
+          "failureCause": null
+        }
+      ],
+      "nextCursor": "a\n"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumePage cursor128",
+    "schema": "KubernetesVolumePage",
+    "value": {
+      "items": [
+        {
+          "id": "volume-1",
+          "clusterId": "kubernetes_cluster",
+          "name": "volume-name",
+          "status": "AVAILABLE",
+          "volumeMode": "FILESYSTEM",
+          "fsType": "XFS",
+          "capacityBytes": 1024,
+          "formatPolicy": "PREFORMATTED",
+          "source": null,
+          "creationDate": "2026-10-13T12:34:56.123456789Z",
+          "provenance": "NATIVE",
+          "adopted": true
+        }
+      ],
+      "nextCursor": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true
+  },
+  {
+    "label": "KubernetesVolumePage cursor129",
+    "schema": "KubernetesVolumePage",
+    "value": {
+      "items": [
+        {
+          "id": "volume-1",
+          "clusterId": "kubernetes_cluster",
+          "name": "volume-name",
+          "status": "AVAILABLE",
+          "volumeMode": "FILESYSTEM",
+          "fsType": "XFS",
+          "capacityBytes": 1024,
+          "formatPolicy": "PREFORMATTED",
+          "source": null,
+          "creationDate": "2026-10-13T12:34:56.123456789Z",
+          "provenance": "NATIVE",
+          "adopted": true
+        }
+      ],
+      "nextCursor": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumePage newline cursor",
+    "schema": "KubernetesVolumePage",
+    "value": {
+      "items": [
+        {
+          "id": "volume-1",
+          "clusterId": "kubernetes_cluster",
+          "name": "volume-name",
+          "status": "AVAILABLE",
+          "volumeMode": "FILESYSTEM",
+          "fsType": "XFS",
+          "capacityBytes": 1024,
+          "formatPolicy": "PREFORMATTED",
+          "source": null,
+          "creationDate": "2026-10-13T12:34:56.123456789Z",
+          "provenance": "NATIVE",
+          "adopted": true
+        }
+      ],
+      "nextCursor": "a\n"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeAttachmentPage cursor128",
+    "schema": "KubernetesVolumeAttachmentPage",
+    "value": {
+      "items": [
+        {
+          "volumeId": "vol-1",
+          "nodeId": "VM:incarnation",
+          "transport": "QEMU",
+          "device": {
+            "bus": "VIRTIO_SCSI",
+            "serial": "disk_1.-ABC"
+          },
+          "generation": 1,
+          "readonly": false,
+          "volumeMode": "FILESYSTEM",
+          "fsType": "XFS",
+          "formatPolicy": "PREFORMATTED",
+          "status": "ATTACHED",
+          "attachedAt": "2026-10-13T12:34:56.123456789Z"
+        }
+      ],
+      "nextCursor": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true
+  },
+  {
+    "label": "KubernetesVolumeAttachmentPage cursor129",
+    "schema": "KubernetesVolumeAttachmentPage",
+    "value": {
+      "items": [
+        {
+          "volumeId": "vol-1",
+          "nodeId": "VM:incarnation",
+          "transport": "QEMU",
+          "device": {
+            "bus": "VIRTIO_SCSI",
+            "serial": "disk_1.-ABC"
+          },
+          "generation": 1,
+          "readonly": false,
+          "volumeMode": "FILESYSTEM",
+          "fsType": "XFS",
+          "formatPolicy": "PREFORMATTED",
+          "status": "ATTACHED",
+          "attachedAt": "2026-10-13T12:34:56.123456789Z"
+        }
+      ],
+      "nextCursor": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
+    "label": "KubernetesVolumeAttachmentPage newline cursor",
+    "schema": "KubernetesVolumeAttachmentPage",
+    "value": {
+      "items": [
+        {
+          "volumeId": "vol-1",
+          "nodeId": "VM:incarnation",
+          "transport": "QEMU",
+          "device": {
+            "bus": "VIRTIO_SCSI",
+            "serial": "disk_1.-ABC"
+          },
+          "generation": 1,
+          "readonly": false,
+          "volumeMode": "FILESYSTEM",
+          "fsType": "XFS",
+          "formatPolicy": "PREFORMATTED",
+          "status": "ATTACHED",
+          "attachedAt": "2026-10-13T12:34:56.123456789Z"
+        }
+      ],
+      "nextCursor": "a\n"
+    },
+    "valid": false
+  },
+  {
+    "label": "shared error unknown code extensible",
+    "schema": "HTTPErrorBody",
+    "value": {
+      "apiRequestId": "request_test",
+      "code": "clever.future.error",
+      "context": {
+        "type": "empty"
+      },
+      "error": "Sanitized failure"
+    },
+    "valid": true
+  },
+  {
+    "label": "published catalogue closed",
+    "schema": "KubernetesCsiErrorCode",
+    "value": "clever.future.error",
+    "valid": false
+  },
+  {
+    "label": "public failure valid",
+    "schema": "KubernetesCsiFailure",
+    "value": {
+      "apiRequestId": "request_test",
+      "code": "clever.kubernetes.snapshot-failed",
+      "context": {
+        "type": "empty"
+      },
+      "error": "public failure"
+    },
+    "valid": true
+  },
+  {
+    "label": "public failure ASCII boundary",
+    "schema": "KubernetesCsiFailure",
+    "value": {
+      "apiRequestId": "request_test",
+      "code": "clever.kubernetes.snapshot-failed",
+      "context": {
+        "type": "empty"
+      },
+      "error": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true
+  },
+  {
+    "label": "public failure message too long",
+    "schema": "KubernetesCsiFailure",
+    "value": {
+      "apiRequestId": "request_test",
+      "code": "clever.kubernetes.snapshot-failed",
+      "context": {
+        "type": "empty"
+      },
+      "error": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
+    "label": "public failure UTF8 boundary",
+    "schema": "KubernetesCsiFailure",
+    "value": {
+      "apiRequestId": "request_test",
+      "code": "clever.kubernetes.snapshot-failed",
+      "context": {
+        "type": "empty"
+      },
+      "error": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+    },
+    "valid": true
+  },
+  {
+    "label": "public failure UTF8 bytes too long",
+    "schema": "KubernetesCsiFailure",
+    "value": {
+      "apiRequestId": "request_test",
+      "code": "clever.kubernetes.snapshot-failed",
+      "context": {
+        "type": "empty"
+      },
+      "error": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+    },
+    "valid": false
+  },
+  {
+    "label": "public failure no raw gateway body",
+    "schema": "KubernetesCsiFailure",
+    "value": {
+      "apiRequestId": "request_test",
+      "code": "clever.kubernetes.snapshot-failed",
+      "context": {
+        "type": "gateway_error",
+        "original_body": "private upstream response"
+      },
+      "error": "public failure"
+    },
+    "valid": false
+  },
+  {
+    "label": "public failure total serialized bytes",
+    "schema": "KubernetesCsiFailure",
+    "value": {
+      "apiRequestId": "request_test",
+      "code": "clever.kubernetes.snapshot-failed",
+      "context": {
+        "type": "resource",
+        "kind": "volume",
+        "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "error": "public failure"
+    },
+    "valid": false
+  },
+  {
+    "label": "public failure public resource reference",
+    "schema": "KubernetesCsiFailure",
+    "value": {
+      "apiRequestId": "request_test",
+      "code": "clever.kubernetes.snapshot-failed",
+      "context": {
+        "type": "resource",
+        "kind": "volume",
+        "name": "volume_1"
+      },
+      "error": "public failure"
+    },
+    "valid": true
+  },
+  {
+    "label": "DETACHED requires at least one completed node",
+    "schema": "KubernetesDetachOutcome",
+    "value": {
+      "outcome": "DETACHED",
+      "resourceId": "vol-1",
+      "nodeId": null,
+      "detachedNodeIds": [],
+      "operationId": null
+    },
+    "valid": false
+  },
+  {
+    "label": "attachment allowlist empty",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {},
+      "allowedTransports": []
+    },
+    "valid": false
+  },
+  {
+    "label": "attachment allowlist duplicate",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {},
+      "allowedTransports": [
+        "QEMU",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "attachment allowlist unknown",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {},
+      "allowedTransports": [
+        "UNKNOWN"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "attachment allowlist missing",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "volumeContext": {}
+    },
+    "valid": false
+  },
+  {
+    "label": "legacy-only attachment preserves BTRFS",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "volumeContext": {
+        "encrypted": "true",
+        "mounter": "rbd-nbd"
+      },
+      "allowedTransports": [
+        "LEGACY_KRBD"
+      ]
+    },
+    "valid": true
+  },
+  {
+    "label": "legacy-only attachment preserves None",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": null,
+      "volumeContext": {
+        "encrypted": "true",
+        "mounter": "rbd-nbd"
+      },
+      "allowedTransports": [
+        "LEGACY_KRBD"
+      ]
+    },
+    "valid": true
+  },
+  {
+    "label": "QEMU allowlist rejects legacy filesystem",
+    "schema": "KubernetesVolumeAttachmentEnsure",
+    "value": {
+      "nodeId": "vm-1",
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "volumeContext": {},
+      "allowedTransports": [
+        "LEGACY_KRBD",
+        "QEMU"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "label": "legacy attachment preserves existing shape and initialization",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "LEGACY_KRBD",
+      "device": null,
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "formatPolicy": "LEGACY_MANAGED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": true
+  },
+  {
+    "label": "QEMU attachment rejects legacy filesystem",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "formatPolicy": "PREFORMATTED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "QEMU attachment rejects legacy initialization",
+    "schema": "KubernetesReadyAttachment",
+    "value": {
+      "volumeId": "vol-1",
+      "nodeId": "VM:incarnation",
+      "transport": "QEMU",
+      "device": {
+        "bus": "VIRTIO_SCSI",
+        "serial": "disk_1.-ABC"
+      },
+      "generation": 1,
+      "readonly": false,
+      "volumeMode": "FILESYSTEM",
+      "fsType": "XFS",
+      "formatPolicy": "LEGACY_MANAGED",
+      "status": "ATTACHED",
+      "attachedAt": "2026-10-13T12:34:56.123456789Z"
+    },
+    "valid": false
+  },
+  {
+    "label": "legacy volume observation preserves existing policy",
+    "schema": "KubernetesVolume",
+    "value": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "clusterId": "kubernetes_cluster",
+      "name": null,
+      "status": "AVAILABLE",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "capacityBytes": 1024,
+      "formatPolicy": "LEGACY_MANAGED",
+      "source": null,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "provenance": "LEGACY",
+      "adopted": false
+    },
+    "valid": true
+  },
+  {
+    "label": "adopted volume requires QEMU policy",
+    "schema": "KubernetesVolume",
+    "value": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "clusterId": "kubernetes_cluster",
+      "name": null,
+      "status": "AVAILABLE",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "capacityBytes": 1024,
+      "formatPolicy": "LEGACY_MANAGED",
+      "source": null,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "provenance": "LEGACY",
+      "adopted": true
+    },
+    "valid": false
+  },
+  {
+    "label": "native volume rejects legacy filesystem",
+    "schema": "KubernetesReadyVolume",
+    "value": {
+      "id": "volume-1",
+      "clusterId": "kubernetes_cluster",
+      "name": "volume-name",
+      "status": "AVAILABLE",
+      "volumeMode": "FILESYSTEM",
+      "fsType": "BTRFS",
+      "capacityBytes": 1024,
+      "formatPolicy": "PREFORMATTED",
+      "source": null,
+      "creationDate": "2026-10-13T12:34:56.123456789Z",
+      "provenance": "NATIVE",
+      "adopted": true
+    },
+    "valid": false
+  },
+  {
+    "label": "legacy expansion expected filesystem BTRFS",
+    "schema": "KubernetesVolumeExpand",
+    "value": {
+      "requiredBytes": 8192,
+      "expectedShape": {
+        "volumeMode": "FILESYSTEM",
+        "fsType": "BTRFS"
+      }
+    },
+    "valid": true
+  },
+  {
+    "label": "legacy expansion expected filesystem None",
+    "schema": "KubernetesVolumeExpand",
+    "value": {
+      "requiredBytes": 8192,
+      "expectedShape": {
+        "volumeMode": "FILESYSTEM",
+        "fsType": null
+      }
+    },
+    "valid": true
+  },
+  {
+    "label": "block expansion rejects filesystem",
+    "schema": "KubernetesVolumeExpand",
+    "value": {
+      "requiredBytes": 8192,
+      "expectedShape": {
+        "volumeMode": "BLOCK",
+        "fsType": "XFS"
+      }
+    },
+    "valid": false
+  },
+  {
+    "label": "capabilities include mandatory transport guard",
+    "schema": "KubernetesCsiFeatures",
+    "value": {
+      "core": [
+        "VOLUME_ENSURE",
+        "VOLUME_RESOLVE",
+        "VOLUME_DELETE",
+        "ATTACHMENT_ENSURE",
+        "ATTACHMENT_DELETE",
+        "ATTACHMENT_READONLY",
+        "ATTACHMENT_ALLOWED_TRANSPORTS"
+      ],
+      "optional": [
+        "LEGACY_POOL_ROUTING"
+      ]
+    },
+    "valid": true
+  },
+  {
+    "label": "capabilities missing mandatory transport guard",
+    "schema": "KubernetesCsiFeatures",
+    "value": {
+      "core": [
+        "VOLUME_ENSURE",
+        "VOLUME_RESOLVE",
+        "VOLUME_DELETE",
+        "ATTACHMENT_ENSURE",
+        "ATTACHMENT_DELETE",
+        "ATTACHMENT_READONLY"
+      ],
+      "optional": [
+        "LEGACY_POOL_ROUTING"
+      ]
+    },
+    "valid": false
+  }
+]

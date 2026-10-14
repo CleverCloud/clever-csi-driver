@@ -1,0 +1,1988 @@
+openapi: 3.1.0
+info:
+  title: Clever Cloud API — proposed Kubernetes CSI resources
+  version: '2026-10-13'
+  description: |-
+    Proposed contract revision 2026-10-13. Neither the current clever-csi-driver nor the existing Axo backend implements this revision. The driver at baseline commit 339e7f0 implements the separate clever-csi-v1 action-based protocol. This document is an integration target, not a deployable compatibility claim; see axo-api.md for the implementation boundary and rollout prerequisites.
+    Every resource lookup is byte-exact and scoped to the authenticated owner and cluster, using the authoritative Axo registry and the ceph-csi journal where applicable. GET, listing and resolve do not register aliases, adopt resources or trigger billing. Backend lookup failure is an error, never absence. Adoption occurs only during an authorized QEMU attachment, once and durably.
+    Before rollout, inventory all existing volume handles, snapshot handles and node identities. This revision restricts resource handles to a path-safe ASCII alphabet; incompatible existing identities are never rewritten and never treated locally as absent. The driver must fail with FAILED_PRECONDITION and require operator intervention. Node identities are opaque tokens, not necessarily UUIDs; the HTTP frontend must preserve a correctly percent-encoded path segment byte-for-byte. If round-trip safety cannot be established, fail without reporting successful deletion.
+    JSON fields are camelCase and CSI business enums are SCREAMING_SNAKE_CASE. The shared Axo error-context representation retains its existing snake_case discriminants and fields. Keys inside parameters and volumeContext retain their CSI spellings. JSON Schema maxLength counts Unicode characters, not UTF-8 bytes: x-maxUtf8Bytes documents additional byte limits enforced by server validation. Request fields, types and business enums are validated; unknown request fields are rejected. Responses may add fields. Feature names are forward-compatible strings; features enable operations, never alternative response shapes. New business enum values require a newer pinned Clever-API-Version.
+    Mutations reconcile durable intent. Success means verified operation-specific postconditions, never merely accepted work; HTTP 202 is not emitted. A bounded Prefer wait either reaches completion or returns 409 operation-in-progress with Retry-After. Client timeout or disconnect does not cancel intent. Replays join the operation and inspect current state; no stale success is replayed. No Idempotency-Key header is used. Creation identity is the scoped CSI name; attachment identity is the immutable volume handle and exact node incarnation. Handles are never reassigned, including after delete and recreate under the same name.
+    DELETE succeeds only with HTTP 200 and a validated outcome decided by the server after authoritative lookup. No HTTP 404, malformed identity or missing route is converted into successful deletion. Cross-cluster resources are indistinguishable from absent resources after authorization, but cluster absence is a distinct error. Resource deletion preserves dependent snapshots and clones and never implicitly detaches a mounted volume.
+    Handler errors use HTTPErrorBody. Existing authentication and path-validation middleware may return the legacy cc-api or OVD forms documented below; clients fall back to the HTTP status. The machine-readable x-csi-error-codes catalogue defines this revision's handler codes and RPC-specific mappings. Success bodies must match the requested identity, shape, read-only policy and capacity. Invalid mutation successes are retryable UNAVAILABLE with the same reconciliation identity; malformed read successes are DATA_LOSS. Unknown errors use the documented status fallback, never delete success.
+    The driver must pin Clever-API-Version to its compiled contract date on every request. Human clients may omit it to select the newest revision. Dates are RFC 3339 UTC with up to nine fractional digits; timestamp nanoseconds must be preserved. Read operations admit the scoped driver Biscuit or organization OAuth1 through existing membership and admission checks, except capabilities and POST resolve, which are driver-only. Mutations are driver-only; this does not extend existing human write access to CSI resources.
+    Request bodies are bounded by maxRequestBytes. Response pages are limited by both item count and serialized bytes, never more than 1 MiB. The proposed wait defaults of 30 seconds and maximum of 110 seconds require validation against the real HTTP frontend and all client deadlines before rollout. The client leaves transport slack inside both its HTTP and remaining gRPC deadline; it must not add slack after exceeding either budget.
+servers:
+- {url: 'https://api.clever-cloud.com'}
+tags:
+- name: Kubernetes
+  description: Proposed cluster storage resources; not implemented by the current driver or backend.
+x-contract-status: PROPOSED_NOT_IMPLEMENTED
+x-current-driver-protocol: {name: clever-csi-v1, baselineCommit: 339e7f0}
+paths:
+  /v4/kubernetes/organisations/{ownerId}/clusters/{clusterId}/csi/capabilities:
+    parameters:
+    - {$ref: '#/components/parameters/OwnerId'}
+    - {$ref: '#/components/parameters/ClusterId'}
+    get:
+      operationId: getKubernetesCsiCapabilities
+      tags: [Kubernetes]
+      summary: Read the selected contract and cached backend readiness
+      description: 'Driver-only scoped read. Pin the contract date even here. ready=false is HTTP 200
+        with reasons; too-old contract, missing core feature or missing LEGACY_POOL_ROUTING in a mixed
+        pool makes the driver unready. Ignore unknown feature strings. Health observations are at most
+        ten seconds old and the response is Cache-Control: no-store.'
+      security:
+      - {biscuit: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control:
+              description: Readiness changes must not be hidden by HTTP caching.
+              schema: {type: string, enum: [no-store]}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesCsiCapabilities'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+  /v4/kubernetes/organisations/{ownerId}/clusters/{clusterId}/csi/volumes:
+    parameters:
+    - {$ref: '#/components/parameters/OwnerId'}
+    - {$ref: '#/components/parameters/ClusterId'}
+    get:
+      operationId: listKubernetesVolumes
+      tags: [Kubernetes]
+      summary: List observed volumes without adoption
+      description: Read the scoped registry and compatible legacy journal entries without creating aliases
+        or billing. No matches is an empty page; inaccessible dependencies are errors. Pagination is bounded
+        by count and bytes.
+      security:
+      - {biscuit: []}
+      - {oauth1: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      - {$ref: '#/components/parameters/Cursor'}
+      - {$ref: '#/components/parameters/Limit'}
+      - name: name
+        in: query
+        schema: {$ref: '#/components/schemas/KubernetesCsiName'}
+        description: Exact live creation name filter.
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.invalid-cursor, clever.kubernetes.unsupported-capability]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesVolumePage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '501': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: VOLUME_LIST
+    post:
+      operationId: ensureKubernetesVolume
+      tags: [Kubernetes]
+      summary: Ensure a volume, clone or restore by scoped CSI name
+      description: 'Ensure-by-name: 201 when this operation creates the initialized resource, 200 for
+        a compatible existing resource or joined replay. Validate range, immutable source, policy and
+        shape before mutation. An incompatible terminal existing resource is incompatible-resource. An
+        in-flight operation is joined for a compatible replay; conflicting work returns operation-in-progress.
+        Creating a resource after an older handle was deleted allocates a new never-reused handle. Clone/restore
+        require their optional features. Unsupported encryption/RWX is rejected. Only Axo initializes
+        the filesystem; the guest never formats. Writable NodeStage grows the existing filesystem to
+        guest device capacity before success. Before read-only clone/restore attachment eligibility,
+        Axo must grow and verify the filesystem to the requested capacity under exclusive maintenance
+        ownership; growing only the image is insufficient. Growth never authorizes reformatting.'
+      security:
+      - {biscuit: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      - {$ref: '#/components/parameters/PreferWait'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.forbidden-parameter, clever.kubernetes.incompatible-source, clever.kubernetes.capacity-out-of-range,
+        clever.kubernetes.volume-not-found, clever.kubernetes.snapshot-not-found, clever.kubernetes.incompatible-resource,
+        clever.kubernetes.operation-in-progress, clever.kubernetes.storage-quota-exceeded, clever.kubernetes.unsupported-capability]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Preference-Applied: {$ref: '#/components/headers/PreferenceApplied'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesReadyVolume'}
+        '201':
+          description: Created resource or new observed attachment; completed postconditions match HTTP
+            200.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Preference-Applied: {$ref: '#/components/headers/PreferenceApplied'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesReadyVolume'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '409': {$ref: '#/components/responses/HandlerError'}
+        '412': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '501': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: VOLUME_ENSURE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/KubernetesVolumeEnsure'}
+  /v4/kubernetes/organisations/{ownerId}/clusters/{clusterId}/csi/volumes/{volumeId}:
+    parameters:
+    - {$ref: '#/components/parameters/OwnerId'}
+    - {$ref: '#/components/parameters/ClusterId'}
+    - {$ref: '#/components/parameters/VolumeId'}
+    get:
+      operationId: getKubernetesVolume
+      tags: [Kubernetes]
+      summary: Read an observed volume by immutable handle
+      description: Pure authoritative lookup through registry and legacy journal. No alias insertion,
+        adoption or billing. A foreign resource is indistinguishable from absence; a failed lookup is
+        backend-unavailable.
+      security:
+      - {biscuit: []}
+      - {oauth1: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.volume-not-found]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesVolume'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: VOLUME_RESOLVE
+    delete:
+      operationId: deleteKubernetesVolume
+      tags: [Kubernetes]
+      summary: Delete a detached volume with an authoritative outcome
+      description: Only HTTP 200 with resourceId equal to volumeId, nodeId null and detachedNodeIds empty
+        is success. DELETED means the CSI identity is gone and no longer listed; deferred backend purge
+        must not break retained snapshots/clones. ALREADY_ABSENT requires authoritative scoped registry
+        and legacy-journal absence. Never detach implicitly. A retained attachment or pending claim returns
+        volume-in-use. No 404 or invalid handle is converted to success.
+      security:
+      - {biscuit: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      - {$ref: '#/components/parameters/PreferWait'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.operation-in-progress, clever.kubernetes.volume-in-use]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Preference-Applied: {$ref: '#/components/headers/PreferenceApplied'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesResourceDeleteOutcome'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '409': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: VOLUME_DELETE
+  /v4/kubernetes/organisations/{ownerId}/clusters/{clusterId}/csi/volumes/{volumeId}/resolve:
+    parameters:
+    - {$ref: '#/components/parameters/OwnerId'}
+    - {$ref: '#/components/parameters/ClusterId'}
+    - {$ref: '#/components/parameters/VolumeId'}
+    post:
+      operationId: resolveKubernetesVolume
+      tags: [Kubernetes]
+      summary: Verify observed shape and untrusted CSI hints without mutation
+      description: Driver-only read with a body. Resolve through registry and legacy journal on every
+        route; this call is not a prerequisite for attachment and does not insert an alias or adopt. Return
+        observed shape whenever verifiable, including differences from expectedShape. A positively established
+        incompatibility may return 412 shape-mismatch, which ValidateVolumeCapabilities maps to OK with
+        confirmed absent. Unknown/unreadable backend state remains an error, never unconfirmed success.
+      security:
+      - {biscuit: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.forbidden-parameter, clever.kubernetes.volume-not-found, clever.kubernetes.shape-mismatch]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesVolume'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '412': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: VOLUME_RESOLVE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/KubernetesVolumeResolve'}
+  /v4/kubernetes/organisations/{ownerId}/clusters/{clusterId}/csi/volumes/{volumeId}/expand:
+    parameters:
+    - {$ref: '#/components/parameters/OwnerId'}
+    - {$ref: '#/components/parameters/ClusterId'}
+    - {$ref: '#/components/parameters/VolumeId'}
+    post:
+      operationId: expandKubernetesVolume
+      tags: [Kubernetes]
+      summary: Expand an image and verify its observable capacity
+      description: No shrink. Verify supplied expectedShape before any mutation; 412 shape-mismatch maps
+        to ControllerExpandVolume INVALID_ARGUMENT. Observe image and QEMU device capacity after expansion;
+        do not return success for an enqueued resize. Respect mounted/offline filesystem responsibilities
+        stated in KubernetesVolumeExpand. Attached volumes are not rejected solely for being attached
+        when safe online expansion is available.
+      security:
+      - {biscuit: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      - {$ref: '#/components/parameters/PreferWait'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.capacity-out-of-range, clever.kubernetes.volume-not-found, clever.kubernetes.operation-in-progress,
+        clever.kubernetes.legacy-session-present, clever.kubernetes.shape-mismatch, clever.kubernetes.storage-quota-exceeded,
+        clever.kubernetes.hypervisor-unreachable, clever.kubernetes.unsupported-capability]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Preference-Applied: {$ref: '#/components/headers/PreferenceApplied'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesReadyVolume'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '409': {$ref: '#/components/responses/HandlerError'}
+        '412': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '501': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: VOLUME_EXPAND
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/KubernetesVolumeExpand'}
+  /v4/kubernetes/organisations/{ownerId}/clusters/{clusterId}/csi/volumes/{volumeId}/attachments:
+    parameters:
+    - {$ref: '#/components/parameters/OwnerId'}
+    - {$ref: '#/components/parameters/ClusterId'}
+    - {$ref: '#/components/parameters/VolumeId'}
+    get:
+      operationId: listKubernetesVolumeAttachments
+      tags: [Kubernetes]
+      summary: List attachment observations for a volume
+      description: Read-only listing of current scoped attachment records, including unresolved lifecycle
+        states; no QMP instruction or adoption is performed.
+      security:
+      - {biscuit: []}
+      - {oauth1: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      - {$ref: '#/components/parameters/Cursor'}
+      - {$ref: '#/components/parameters/Limit'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.invalid-cursor, clever.kubernetes.volume-not-found, clever.kubernetes.unsupported-capability]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesVolumeAttachmentPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '501': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: ATTACHMENT_LIST
+    post:
+      operationId: ensureKubernetesVolumeAttachment
+      tags: [Kubernetes]
+      summary: Ensure a fenced QEMU attachment or verified legacy route
+      description: 'Identity is (volumeId,nodeId). 201 is a new observed attachment, 200 an existing compatible
+        observation. Do not change another live owner. A new QEMU target must be the exact current VM
+        incarnation; historical Node names route only through the legacy registry. Before QEMU adoption,
+        prove legacy release, fence prior ownership, then observe the device and readonly state. generation
+        and serial survive reboot/migration of the same incarnation. A new fencing epoch is not permission
+        to rotate the serial. Read-only raw Block additionally requires the guest kernel read-only flag;
+        an ro bind mount is insufficient. An attachment request never evicts a valid live writer: return
+        attached-elsewhere. Fencing addresses superseded work or an incarnation authoritatively retired
+        by the platform, not destruction of an active owner to satisfy the request. LEGACY_KRBD is available
+        only for a verified unadopted legacy image without live/pending QEMU ownership or a fence forbidding
+        return to legacy access. allowedTransports is required and enforced atomically against the
+        authoritative route before any attachment/adoption mutation; an excluded route returns 412
+        transport-not-allowed. Verify ATTACHMENT_ALLOWED_TRANSPORTS on capabilities before every attach.
+        Retirement/FORCE heal durably reconciles old intents, devices and locks across restarts, fencing
+        the exact librbd client/session rather than a shared hypervisor IP. A replacement incarnation
+        cannot inherit the old owner. QEMU nodeId is copied into publish_context.node_id and must match
+        local incarnation before any NodeStage/NodePublish effect, including retries.'
+      security:
+      - {biscuit: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      - {$ref: '#/components/parameters/PreferWait'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.forbidden-parameter, clever.kubernetes.volume-not-found, clever.kubernetes.node-not-found,
+        clever.kubernetes.incompatible-resource, clever.kubernetes.operation-in-progress, clever.kubernetes.attached-elsewhere,
+        clever.kubernetes.attachment-conflict, clever.kubernetes.incarnation-unknown, clever.kubernetes.shape-mismatch,
+        clever.kubernetes.node-not-attachable, clever.kubernetes.fencing-required, clever.kubernetes.legacy-path-not-released,
+        clever.kubernetes.attachment-limit, clever.kubernetes.hypervisor-unreachable, clever.kubernetes.unsupported-capability,
+        clever.kubernetes.transport-not-allowed]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Preference-Applied: {$ref: '#/components/headers/PreferenceApplied'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesReadyAttachment'}
+        '201':
+          description: Created resource or new observed attachment; completed postconditions match HTTP
+            200.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Preference-Applied: {$ref: '#/components/headers/PreferenceApplied'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesReadyAttachment'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '409': {$ref: '#/components/responses/HandlerError'}
+        '412': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '501': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: ATTACHMENT_ENSURE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/KubernetesVolumeAttachmentEnsure'}
+    delete:
+      operationId: deleteKubernetesVolumeAttachments
+      tags: [Kubernetes]
+      summary: Complete detach across every applicable incarnation
+      description: Detach-all is a distinct resource path, not a sentinel node id. resourceId must equal
+        volumeId and nodeId must be null. Check every recorded QEMU or legacy target. Return DETACHED
+        only after all applicable QEMU devices are observed absent; report completed QEMU targets in detachedNodeIds.
+        Return LEGACY_NOOP only if every applicable target is authoritatively validated as legacy and
+        no QEMU removal is needed. ALREADY_ABSENT requires proof of no relevant attachments/sessions,
+        including legacy. Partial completion, unknown incarnation, missing fence, busy device or unreachable
+        dependency is not success. Preserve enough destroyed/fenced incarnation evidence while resources
+        can refer to it; alternatively prove global absence rather than treating an unknown node as absent.
+      security:
+      - {biscuit: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      - {$ref: '#/components/parameters/PreferWait'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.operation-in-progress, clever.kubernetes.incarnation-unknown, clever.kubernetes.device-busy,
+        clever.kubernetes.fencing-required, clever.kubernetes.hypervisor-unreachable]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Preference-Applied: {$ref: '#/components/headers/PreferenceApplied'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesDetachOutcome'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '409': {$ref: '#/components/responses/HandlerError'}
+        '412': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: ATTACHMENT_DELETE
+  /v4/kubernetes/organisations/{ownerId}/clusters/{clusterId}/csi/volumes/{volumeId}/attachments/{nodeId}:
+    parameters:
+    - {$ref: '#/components/parameters/OwnerId'}
+    - {$ref: '#/components/parameters/ClusterId'}
+    - {$ref: '#/components/parameters/VolumeId'}
+    - {$ref: '#/components/parameters/NodeId'}
+    get:
+      operationId: getKubernetesVolumeAttachment
+      tags: [Kubernetes]
+      summary: Read the observed attachment for an exact node identity
+      description: Pure scoped lookup. If there is no attachment record return attachment-not-found regardless
+        of whether the node incarnation exists, avoiding an unrelated VM-existence oracle.
+      security:
+      - {biscuit: []}
+      - {oauth1: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.volume-not-found, clever.kubernetes.attachment-not-found]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesVolumeAttachment'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: ATTACHMENT_ENSURE
+    delete:
+      operationId: deleteKubernetesVolumeAttachment
+      tags: [Kubernetes]
+      summary: Complete detach of the exact volume/node pair
+      description: resourceId and nodeId must echo the exact path values. Return DETACHED only after device
+        removal is observed or the exact incarnation is durably known destroyed and fenced, never because
+        a same-name replacement exists. LEGACY_NOOP requires authoritative legacy classification and verification.
+        ALREADY_ABSENT follows a complete authoritative lookup, not a missing route or unknown node. An
+        unrepresentable node path token requires operator intervention, never local success. The volume
+        may already be deleted if authoritative evidence still proves the requested detachment complete.
+      security:
+      - {biscuit: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      - {$ref: '#/components/parameters/PreferWait'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.operation-in-progress, clever.kubernetes.incarnation-unknown, clever.kubernetes.device-busy,
+        clever.kubernetes.fencing-required, clever.kubernetes.hypervisor-unreachable]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Preference-Applied: {$ref: '#/components/headers/PreferenceApplied'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesDetachOutcome'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '409': {$ref: '#/components/responses/HandlerError'}
+        '412': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: ATTACHMENT_DELETE
+  /v4/kubernetes/organisations/{ownerId}/clusters/{clusterId}/csi/snapshots:
+    parameters:
+    - {$ref: '#/components/parameters/OwnerId'}
+    - {$ref: '#/components/parameters/ClusterId'}
+    get:
+      operationId: listKubernetesSnapshots
+      tags: [Kubernetes]
+      summary: List retained snapshot point-in-time records
+      description: Read-only authoritative registry and legacy-journal lookup. No matches is an empty
+        page. Records exist only after their point-in-time; PROCESSING, READY and durable FAILED records
+        remain visible. The CSI adapter returns INTERNAL when a selected record is FAILED; it must not
+        omit that record, replace its timestamp or claim it is ready.
+      security:
+      - {biscuit: []}
+      - {oauth1: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      - {$ref: '#/components/parameters/Cursor'}
+      - {$ref: '#/components/parameters/Limit'}
+      - name: snapshotId
+        in: query
+        schema: {$ref: '#/components/schemas/KubernetesSnapshotId'}
+        description: Exact snapshot filter. When combined with sourceVolumeId, both must match; authoritative
+          no-match is an empty page.
+      - name: sourceVolumeId
+        in: query
+        schema: {$ref: '#/components/schemas/KubernetesVolumeId'}
+        description: Immutable source filter, retained even after source deletion.
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.invalid-cursor, clever.kubernetes.unsupported-capability]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesSnapshotPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '501': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: SNAPSHOT
+    post:
+      operationId: ensureKubernetesSnapshot
+      tags: [Kubernetes]
+      summary: Ensure the same named point-in-time snapshot
+      description: Before the point-in-time exists, bounded waiting may end in operation-in-progress;
+        no CSI snapshot record is returned yet. Afterwards, 201/200 PROCESSING with readyToUse=false is
+        valid immediately, or READY with true. A durable FAILED snapshot returns 500 snapshot-failed and
+        stays readable; replay never takes a new point-in-time while that record exists. Creation time,
+        source and handle remain immutable. Clone dependencies are preserved on deletion.
+      security:
+      - {biscuit: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      - {$ref: '#/components/parameters/PreferWait'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.forbidden-parameter, clever.kubernetes.volume-not-found, clever.kubernetes.incompatible-resource,
+        clever.kubernetes.operation-in-progress, clever.kubernetes.storage-quota-exceeded, clever.kubernetes.snapshot-failed,
+        clever.kubernetes.unsupported-capability]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Preference-Applied: {$ref: '#/components/headers/PreferenceApplied'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesEnsuredSnapshot'}
+        '201':
+          description: Created resource or new observed attachment; completed postconditions match HTTP
+            200.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Preference-Applied: {$ref: '#/components/headers/PreferenceApplied'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesEnsuredSnapshot'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '409': {$ref: '#/components/responses/HandlerError'}
+        '412': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '500': {$ref: '#/components/responses/HandlerError'}
+        '501': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: SNAPSHOT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/KubernetesSnapshotEnsure'}
+  /v4/kubernetes/organisations/{ownerId}/clusters/{clusterId}/csi/snapshots/{snapshotId}:
+    parameters:
+    - {$ref: '#/components/parameters/OwnerId'}
+    - {$ref: '#/components/parameters/ClusterId'}
+    - {$ref: '#/components/parameters/SnapshotId'}
+    get:
+      operationId: getKubernetesSnapshot
+      tags: [Kubernetes]
+      summary: Read a retained snapshot including durable failure
+      description: Return PROCESSING, READY or FAILED after the point-in-time, without adoption or billing.
+        For CSI ListSnapshots(snapshot_id), an authoritative snapshot-not-found becomes an empty page;
+        a selected FAILED record becomes INTERNAL. Missing route and backend failure do not mean absence.
+      security:
+      - {biscuit: []}
+      - {oauth1: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.snapshot-not-found, clever.kubernetes.unsupported-capability]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesSnapshot'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '501': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: SNAPSHOT
+    delete:
+      operationId: deleteKubernetesSnapshot
+      tags: [Kubernetes]
+      summary: Delete a snapshot identity without breaking dependent clones
+      description: Only HTTP 200 with resourceId equal to snapshotId, nodeId null and detachedNodeIds
+        empty is success. DELETED means this snapshot identity is no longer visible, even if safe backend
+        purge is deferred. ALREADY_ABSENT requires authoritative registry and legacy-journal absence.
+        Preserve dependent clones and retained source relationships; no false absence while lookups fail.
+      security:
+      - {biscuit: []}
+      parameters:
+      - {$ref: '#/components/parameters/ApiVersion'}
+      - {$ref: '#/components/parameters/RequestId'}
+      - {$ref: '#/components/parameters/PreferWait'}
+      x-csi-error-codes: [clever.kubernetes.invalid-request, clever.kubernetes.cluster-not-found, clever.kubernetes.request-too-large,
+        clever.kubernetes.rate-limited, clever.kubernetes.backend-unavailable, clever.kubernetes.upstream-timeout,
+        clever.kubernetes.operation-in-progress, clever.kubernetes.unsupported-capability]
+      responses:
+        '200':
+          description: Verified success; see operation postconditions.
+          headers:
+            Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Preference-Applied: {$ref: '#/components/headers/PreferenceApplied'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KubernetesResourceDeleteOutcome'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AuthError'}
+        '403': {$ref: '#/components/responses/AuthError'}
+        '404': {$ref: '#/components/responses/HandlerError'}
+        '409': {$ref: '#/components/responses/HandlerError'}
+        '413': {$ref: '#/components/responses/HandlerError'}
+        '429': {$ref: '#/components/responses/HandlerError'}
+        '501': {$ref: '#/components/responses/HandlerError'}
+        '503': {$ref: '#/components/responses/HandlerError'}
+        '504': {$ref: '#/components/responses/HandlerError'}
+        default: {$ref: '#/components/responses/HandlerError'}
+      x-required-feature: SNAPSHOT
+components:
+  securitySchemes:
+    biscuit:
+      type: http
+      scheme: bearer
+      bearerFormat: Biscuit
+      description: Cluster-scoped capability verified under the Kubernetes module root key, with owner,
+        exact cluster, expiry and a per-operation kubernetes_csi_op fact. Scope mismatch fails before
+        resource lookup, without fallback to a human credential. The driver reloads its token file for
+        rotation. No Ceph credential is carried in this API.
+    oauth1:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: Existing Clever Cloud OAuth 1.0 signed Authorization header, represented as apiKey
+        because OpenAPI has no native OAuth1 security type. Human reads still pass organization membership,
+        role and Kubernetes admission/allow-list checks. This scheme does not authorize CSI mutations.
+  parameters:
+    OwnerId:
+      name: ownerId
+      in: path
+      required: true
+      description: Existing Axo owner path identity, refined by the platform (including supported orga_/user_/tenant_
+        forms); do not introduce a narrower client regex.
+      schema: {type: string}
+    ClusterId:
+      name: clusterId
+      in: path
+      required: true
+      description: Existing Axo kubernetes_<ULID|UUID> identifier, refined by ClusterPath; malformed values
+        fail before the handler.
+      schema: {type: string}
+    VolumeId:
+      name: volumeId
+      in: path
+      required: true
+      description: 'Opaque immutable byte-exact handle, never reassigned. New Axo identifiers are at most
+        128 ASCII bytes; existing compatible ceph-csi handles are accepted up to 1024 bytes. Inventory
+        is a rollout prerequisite: a legacy handle outside this alphabet is not evidence of absence. Never
+        rewrite it or return local delete success; require operator intervention. Backend paths and commands
+        are resolved from registry records, never interpolated from this string.'
+      schema: {$ref: '#/components/schemas/KubernetesVolumeId'}
+    SnapshotId:
+      name: snapshotId
+      in: path
+      required: true
+      description: 'Opaque immutable byte-exact handle, never reassigned. New Axo identifiers are at most
+        128 ASCII bytes; existing compatible ceph-csi handles are accepted up to 1024 bytes. Inventory
+        is a rollout prerequisite: a legacy handle outside this alphabet is not evidence of absence. Never
+        rewrite it or return local delete success; require operator intervention. Backend paths and commands
+        are resolved from registry records, never interpolated from this string.'
+      schema: {$ref: '#/components/schemas/KubernetesSnapshotId'}
+    NodeId:
+      name: nodeId
+      in: path
+      required: true
+      description: Exact opaque node-incarnation token encoded as one path segment; no lowercase or UUID
+        normalization.
+      schema: {$ref: '#/components/schemas/KubernetesNodeId'}
+    ApiVersion:
+      name: Clever-API-Version
+      in: header
+      required: false
+      schema: {type: string, format: date}
+      description: The driver MUST send its compiled contract date on every request, including capabilities.
+        Omission is allowed for human clients and selects the newest revision. A date below the supported
+        floor is 400 and makes the driver unready; never silently renegotiate it.
+    RequestId:
+      name: X-Request-Id
+      in: header
+      schema: {type: string, maxLength: 128, pattern: '^[A-Za-z0-9._-]+(?![\s\S])'}
+      description: Optional client correlation id, echoed separately from Axo-minted apiRequestId; never
+        an idempotency key.
+    PreferWait:
+      name: Prefer
+      in: header
+      schema: {type: string, pattern: '^wait=[0-9]+(?![\s\S])'}
+      description: 'Supported preference: wait=<seconds>, clamped to the advertised maxWaitSeconds. Absent
+        uses defaultWaitSeconds (proposed 30); wait=0 observes immediately, returning success only if
+        complete, otherwise 409 operation-in-progress. Echo the applied value in Preference-Applied. Server
+        responds within applied wait plus bounded response overhead, proposed at most two seconds. The
+        driver reserves a bounded proportional response margin inside both its HTTP timeout and remaining
+        gRPC deadline; a short deadline never gains a fixed extra ten seconds. If no usable budget remains,
+        fail before dispatch. Proposed maxWaitSeconds=110 and frontend overhead require deployment validation.'
+    Cursor:
+      name: cursor
+      in: query
+      schema: {$ref: '#/components/schemas/KubernetesCsiCursor'}
+      description: Opaque cursor scoped to owner, cluster, operation and every filter.
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, format: int32, minimum: 1}
+      description: Default is limits.listLimitDefault. Values above listLimitMax are silently clamped,
+        not rejected; this is the explicit exception to strict request validation. Item and serialized-byte
+        ceilings both apply; a short page can have a nextCursor.
+  headers:
+    RetryAfter:
+      description: Advisory delay in seconds before a subsequent request on operation-in-progress,
+        rate-limited or unavailable responses. It never extends the current CSI call's deadline.
+      schema: {type: integer, minimum: 1}
+    PreferenceApplied:
+      description: The bounded wait actually applied, formatted wait=<seconds>.
+      schema: {type: string}
+    ApiVersion:
+      description: Effective contract date selected for this CSI response.
+      schema: {type: string, format: date}
+    RequestId:
+      description: Echo of a supplied X-Request-Id, separate from the server request id.
+      schema: {type: string}
+  responses:
+    HandlerError:
+      description: Handler error. Map recognized x-csi-error-codes first, including RPC overrides, then
+        fall back to HTTP status. A 404 is never DELETE success. Upstream/router errors may not contain
+        this envelope; do not reinterpret them as resource absence. HTTP 401/403 always retain their
+        authentication/authorization meaning. A recognized code with an incompatible HTTP status is
+        a protocol error (DATA_LOSS), not an RPC-specific success.
+      headers:
+        Retry-After: {$ref: '#/components/headers/RetryAfter'}
+        Clever-API-Version: {$ref: '#/components/headers/ApiVersion'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/HTTPErrorBody'}
+    BadRequest:
+      description: 400 from the CSI handler (HTTPErrorBody) or existing path/version middleware (legacy
+        form possible). Shape incompatibility positively established by resolve uses 412 instead; unavailable
+        shape is 503.
+      content:
+        application/json:
+          schema:
+            anyOf:
+            - {$ref: '#/components/schemas/HTTPErrorBody'}
+            - {$ref: '#/components/schemas/LegacyOvdError'}
+    AuthError:
+      description: Existing authentication/authorization middleware may emit the cc-api form rather than
+        HTTPErrorBody. Use the HTTP status (401 UNAUTHENTICATED, 403 PERMISSION_DENIED); authorization
+        failure never depends on resource existence.
+      content:
+        application/json:
+          schema:
+            anyOf:
+            - {$ref: '#/components/schemas/HTTPErrorBody'}
+            - {$ref: '#/components/schemas/LegacyAuthError'}
+            - {$ref: '#/components/schemas/LegacyOvdError'}
+  schemas:
+    KubernetesVolumeId:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*(?![\s\S])
+      x-maxUtf8Bytes: 1024
+      x-maxNativeBytes: 128
+      description: 'Opaque immutable byte-exact handle, never reassigned. New Axo identifiers are at most
+        128 ASCII bytes; existing compatible ceph-csi handles are accepted up to 1024 bytes. Inventory
+        is a rollout prerequisite: a legacy handle outside this alphabet is not evidence of absence. Never
+        rewrite it or return local delete success; require operator intervention. Backend paths and commands
+        are resolved from registry records, never interpolated from this string.'
+    KubernetesSnapshotId:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*(?![\s\S])
+      x-maxUtf8Bytes: 1024
+      x-maxNativeBytes: 128
+      description: 'Opaque immutable byte-exact handle, never reassigned. New Axo identifiers are at most
+        128 ASCII bytes; existing compatible ceph-csi handles are accepted up to 1024 bytes. Inventory
+        is a rollout prerequisite: a legacy handle outside this alphabet is not evidence of absence. Never
+        rewrite it or return local delete success; require operator intervention. Backend paths and commands
+        are resolved from registry records, never interpolated from this string.'
+    KubernetesNodeId:
+      type: string
+      minLength: 1
+      maxLength: 256
+      pattern: ^[^\s\u0000-\u001F\u007F-\u009F]+(?![\s\S])
+      x-maxUtf8Bytes: 256
+      description: Opaque platform VM-incarnation identity on QEMU nodes; a historical Kubernetes Node
+        name is accepted only through authoritative legacy-pool routing. Never resolve a QEMU target by
+        reusable name or IP. Preserve case and every byte. Percent-encode as exactly one path segment
+        and verify frontend round-trip behavior before rollout; an unrepresentable identity is FAILED_PRECONDITION,
+        never absence. Replacement VMs have different identities. This schema does not require a UUID.
+        Unsupported dot segments or frontend decoding are explicit transport refusals, never evidence
+        that an attachment is absent.
+    KubernetesCsiName:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      pattern: ^[^\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]+(?![\s\S])
+      x-maxUtf8Bytes: 1024
+      x-maxNewNameUtf8Bytes: 128
+      description: Opaque CSI creation name. New creations use at most 128 UTF-8 bytes, matching the upstream
+        CSI name limit. Existing legacy names and compatible replays may use up to 1024 UTF-8 bytes after
+        inventory. A new resource with a longer name is rejected, not silently truncated. Preserve Unicode,
+        spaces, tab, LF and CR. The name is unique among live resources of its kind in the cluster; it
+        may be reused after deletion, but the old handle is never reused.
+    KubernetesCsiTimestamp:
+      type: string
+      format: date-time
+      pattern: ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z(?![\s\S])
+      description: RFC 3339 UTC timestamp, with zero to nine fractional second digits. Preserve nanoseconds;
+        do not round to milliseconds or replace the snapshot point-in-time timestamp on a retry.
+    KubernetesCsiOperationId:
+      type: string
+      minLength: 1
+      maxLength: 128
+      description: Opaque identifier of one durable operation; never an idempotency identity for a resource.
+    KubernetesCsiParameters:
+      type: object
+      maxProperties: 64
+      propertyNames: {type: string, minLength: 1, maxLength: 256, x-maxUtf8Bytes: 256}
+      additionalProperties: {type: string, maxLength: 1024, x-maxUtf8Bytes: 1024}
+      description: Untrusted CSI metadata, never Secret contents. Preserve keys, including CSI snake_case
+        spellings. Validate hints such as pool, namespace, cluster and filesystem against authoritative
+        policy. Reject unsupported parameters, encryption and RWX on new provisioning/QEMU paths.
+        Legacy-only attachments retain existing capabilities and encryption/mounter metadata for
+        authoritative routing; do not apply QEMU restrictions before classification. Reject credential-bearing secret/key/password/token
+        parameters. Enforce UTF-8 byte limits explicitly; deriving a BTreeMap schema alone does not enforce
+        propertyNames or byte counts. Do not log the map in clear text. Limits apply to UTF-8 bytes after
+        decoding, with total serialized request bytes bounded separately.
+    KubernetesVolumeShape:
+      type: object
+      required: [volumeMode, fsType]
+      properties:
+        volumeMode: {type: string, enum: [FILESYSTEM, BLOCK]}
+        fsType: {type: [string, 'null'], enum: [XFS, EXT4, null]}
+      description: FILESYSTEM requires XFS or EXT4; BLOCK requires fsType null. Validate these conditional
+        constraints at runtime.
+      additionalProperties: false
+      allOf:
+      - if:
+          properties:
+            volumeMode: {const: FILESYSTEM}
+          required: [volumeMode]
+        then:
+          properties:
+            fsType: {type: string, enum: [XFS, EXT4]}
+      - if:
+          properties:
+            volumeMode: {const: BLOCK}
+          required: [volumeMode]
+        then:
+          properties:
+            fsType: {type: 'null'}
+    KubernetesExistingVolumeShape:
+      type: object
+      required: [volumeMode, fsType]
+      properties:
+        volumeMode: {type: string, enum: [FILESYSTEM, BLOCK]}
+        fsType: {type: [string, 'null'], minLength: 1}
+      description: Existing-volume shape for authoritative legacy routing and expansion. A null
+        filesystem means unspecified; preserve an explicit filesystem even when it is not XFS/ext4.
+        Block has no filesystem. This does not permit that shape on the QEMU path.
+      additionalProperties: false
+      allOf:
+      - if:
+          properties:
+            volumeMode: {const: BLOCK}
+          required: [volumeMode]
+        then:
+          properties:
+            fsType: {type: 'null'}
+    KubernetesVolumeSource:
+      type: object
+      required: [type, id]
+      properties:
+        type: {type: string, enum: [VOLUME, SNAPSHOT]}
+        id: {$ref: '#/components/schemas/KubernetesVolumeId'}
+      description: Immutable source identity resolved in the same owner and cluster before any copy. The
+        id names a volume for VOLUME and a snapshot for SNAPSHOT.
+      additionalProperties: false
+    KubernetesCsiOperation:
+      type: object
+      required: [id, status, startedAt, failureCause]
+      properties:
+        id: {$ref: '#/components/schemas/KubernetesCsiOperationId'}
+        status: {type: string, enum: [RUNNING, SUCCEEDED, FAILED]}
+        startedAt: {$ref: '#/components/schemas/KubernetesCsiTimestamp'}
+        failureCause:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesCsiFailure'}
+          - {type: 'null'}
+      description: Optional embedded observation of durable work. Failure does not erase an existing snapshot
+        point-in-time. The operation id may also be carried as ErrorContext.operation; no operation route
+        is introduced in this revision. On 409 operation-in-progress, the same id is ErrorContext.name,
+        with type=operation, kind=operation and operation naming the action family.
+    KubernetesVolume:
+      type: object
+      required: [id, clusterId, name, status, volumeMode, fsType, capacityBytes, formatPolicy, source,
+        creationDate, provenance, adopted]
+      properties:
+        id: {$ref: '#/components/schemas/KubernetesVolumeId'}
+        clusterId: {type: string}
+        name:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesCsiName'}
+          - {type: 'null'}
+        status: {type: string, enum: [CREATING, AVAILABLE, IN_USE, EXPANDING, DELETING, FAILED]}
+        volumeMode: {type: string, enum: [FILESYSTEM, BLOCK]}
+        fsType: {type: [string, 'null'], minLength: 1}
+        capacityBytes: {type: integer, format: int64, minimum: 0}
+        formatPolicy: {type: string, minLength: 1}
+        source:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesVolumeSource'}
+          - {type: 'null'}
+        creationDate: {$ref: '#/components/schemas/KubernetesCsiTimestamp'}
+        provenance: {type: string, enum: [NATIVE, LEGACY]}
+        adopted: {type: boolean}
+        operation:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesCsiOperation'}
+          - {type: 'null'}
+      description: Public observation of a resource and its lifecycle. capacityBytes is observed backend
+        capacity, zero only before allocation. creationDate records the durable creation intent, not retry
+        or completion time. name may be null for an inventoried legacy image. GET/list do not adopt. Initialization
+        is performed by Axo before new provisioning/QEMU attachment; the node never formats a disk.
+        Unadopted legacy observations/expansion preserve existing filesystem and initialization policy.
+        Native/adopted records remain restricted to the QEMU policy. Unknown response fields are tolerated.
+      allOf:
+      - if:
+          properties:
+            volumeMode: {const: FILESYSTEM}
+          required: [volumeMode]
+        then:
+          properties:
+            fsType: {type: string, minLength: 1}
+      - if:
+          properties:
+            volumeMode: {const: BLOCK}
+          required: [volumeMode]
+        then:
+          properties:
+            fsType: {type: 'null'}
+      - if:
+          anyOf:
+          - properties:
+              provenance: {const: NATIVE}
+            required: [provenance]
+          - properties:
+              adopted: {const: true}
+            required: [adopted]
+        then:
+          properties:
+            fsType: {type: [string, 'null'], enum: [XFS, EXT4, null]}
+            formatPolicy: {const: PREFORMATTED}
+      - if:
+          properties:
+            provenance: {const: NATIVE}
+          required: [provenance]
+        then:
+          properties:
+            id: {maxLength: 128}
+            name: {type: string, maxLength: 128, x-maxUtf8Bytes: 128}
+    KubernetesReadyVolume:
+      allOf:
+      - {$ref: '#/components/schemas/KubernetesVolume'}
+      - properties:
+          status: {type: string, enum: [AVAILABLE, IN_USE]}
+          capacityBytes: {type: integer, format: int64, minimum: 1}
+      description: 'Mutation success: verified requested shape, content source and capacity, plus
+        initialization for new provisioning or QEMU eligibility. Legacy expansion preserves existing
+        policy. No in-progress or failed state is returned as successful ensure/expand.'
+    KubernetesVolumeEnsure:
+      type: object
+      required: [name, volumeMode, fsType, requiredBytes, parameters]
+      properties:
+        name: {$ref: '#/components/schemas/KubernetesCsiName'}
+        volumeMode: {type: string, enum: [FILESYSTEM, BLOCK]}
+        fsType: {type: [string, 'null'], enum: [XFS, EXT4, null]}
+        requiredBytes: {type: integer, format: int64, minimum: 1}
+        limitBytes: {type: [integer, 'null'], format: int64, minimum: 1}
+        parameters: {$ref: '#/components/schemas/KubernetesCsiParameters'}
+        source:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesVolumeSource'}
+          - {type: 'null'}
+      description: Ensure by scoped name. A compatible existing record is returned, never another image.
+        Resolve source and policy before writing. VOLUME sources require VOLUME_CLONE; SNAPSHOT sources
+        require SNAPSHOT_RESTORE. An omitted/null limit is unbounded by the caller but remains subject
+        to platform limits. Existing capacity must satisfy the range; no silent shrink, reformat or source
+        substitution.
+      additionalProperties: false
+      allOf:
+      - if:
+          properties:
+            volumeMode: {const: FILESYSTEM}
+          required: [volumeMode]
+        then:
+          properties:
+            fsType: {type: string, enum: [XFS, EXT4]}
+      - if:
+          properties:
+            volumeMode: {const: BLOCK}
+          required: [volumeMode]
+        then:
+          properties:
+            fsType: {type: 'null'}
+    KubernetesVolumeResolve:
+      type: object
+      required: [volumeContext, parameters]
+      properties:
+        volumeContext: {$ref: '#/components/schemas/KubernetesCsiParameters'}
+        parameters: {$ref: '#/components/schemas/KubernetesCsiParameters'}
+        expectedShape:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesExistingVolumeShape'}
+          - {type: 'null'}
+      description: Read-only verification. Return the observed record when it can be verified, even if
+        its shape differs from expectedShape, so the driver can answer validation negatively. A positively
+        established incompatibility may be shape-mismatch; an unknown/unreadable backend state is an error,
+        never an unsupported-capability answer. No alias insertion, adoption or billing.
+      additionalProperties: false
+    KubernetesVolumeExpand:
+      type: object
+      required: [requiredBytes]
+      properties:
+        requiredBytes: {type: integer, format: int64, minimum: 1}
+        limitBytes: {type: [integer, 'null'], format: int64, minimum: 1}
+        expectedShape:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesExistingVolumeShape'}
+          - {type: 'null'}
+      description: Monotonic expansion. Validate expectedShape before mutation. Re-observe image capacity
+        and each QEMU attachment after resize, even if the RBD image already satisfies the range on retry;
+        a failed block_resize must be completed before success. Grow the image filesystem from an offline maintenance mount
+        when detached; for mounted volumes expose the enlarged guest device and let NodeExpandVolume rescan/grow
+        the filesystem. No success while an incompatible legacy session makes the operation unsafe.
+      additionalProperties: false
+    KubernetesCsiDevice:
+      type: object
+      required: [bus, serial]
+      properties:
+        bus: {type: string, enum: [VIRTIO_SCSI]}
+        serial:
+          type: string
+          minLength: 1
+          maxLength: 36
+          pattern: ^[A-Za-z0-9._-]{1,36}(?![\s\S])
+          description: Exact QEMU scsi-hd serial exposed by the guest through SCSI VPD page 0x80. Stable
+            for the volume across retries, reboot and migration of the same VM incarnation. Do not rotate
+            it merely because attachment generation or fencing epoch changes. Never reassign it to another
+            volume on that incarnation, including after detach, reboot or cleanup. Persist the
+            volume/incarnation binding because cached publish context can replay; never truncate,
+            pad or normalize. virtio-blk is not supported.
+    KubernetesVolumeAttachment:
+      type: object
+      required: [volumeId, nodeId, transport, device, generation, readonly, volumeMode, fsType, formatPolicy,
+        status, attachedAt]
+      properties:
+        volumeId: {$ref: '#/components/schemas/KubernetesVolumeId'}
+        nodeId: {$ref: '#/components/schemas/KubernetesNodeId'}
+        transport: {type: string, enum: [QEMU, LEGACY_KRBD]}
+        device:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesCsiDevice'}
+          - {type: 'null'}
+        generation: {type: integer, format: int64, minimum: 1}
+        readonly: {type: boolean}
+        volumeMode: {type: string, enum: [FILESYSTEM, BLOCK]}
+        fsType: {type: [string, 'null'], minLength: 1}
+        formatPolicy: {type: string, minLength: 1}
+        status: {type: string, enum: [ATTACHING, ATTACHED, DETACHING, FAILED]}
+        attachedAt:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesCsiTimestamp'}
+          - {type: 'null'}
+        operation:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesCsiOperation'}
+          - {type: 'null'}
+      description: Flat attachment record with exact volume/node identity in both transports. generation
+        identifies the durable observed attachment and survives reboot/migration of the same incarnation;
+        it is distinct from the backend fencing epoch. QEMU requires a device; LEGACY_KRBD requires null
+        device and authoritative legacy routing. Success never resolves a legacy Node name to a QEMU VM.
+        readonly states the backend policy already enforced. For read-only raw Block, the guest must also
+        report blockdev --getro = 1; a read-only bind mount alone does not protect a device inode. LEGACY_KRBD
+        is restricted to a verified LEGACY image not yet adopted, with no live or pending QEMU claim and
+        no recorded fence forbidding legacy access. Native/adopted volumes cannot use this path; rollback
+        requires a separately reviewed workflow. Legacy records preserve their existing filesystem
+        and initialization policy; only QEMU requires XFS/ext4 and PREFORMATTED. QEMU nodeId is the
+        exact incarnation passed to the node in publish_context.node_id, checked before any effect.
+      allOf:
+      - if:
+          properties:
+            volumeMode: {const: FILESYSTEM}
+          required: [volumeMode]
+        then:
+          properties:
+            fsType: {type: string, minLength: 1}
+      - if:
+          properties:
+            volumeMode: {const: BLOCK}
+          required: [volumeMode]
+        then:
+          properties:
+            fsType: {type: 'null'}
+      - if:
+          properties:
+            transport: {const: QEMU}
+          required: [transport]
+        then:
+          properties:
+            device: {$ref: '#/components/schemas/KubernetesCsiDevice'}
+            fsType: {type: [string, 'null'], enum: [XFS, EXT4, null]}
+            formatPolicy: {const: PREFORMATTED}
+      - if:
+          properties:
+            transport: {const: LEGACY_KRBD}
+          required: [transport]
+        then:
+          properties:
+            device: {type: 'null'}
+      - if:
+          properties:
+            status: {const: ATTACHED}
+          required: [status]
+        then:
+          properties:
+            attachedAt: {$ref: '#/components/schemas/KubernetesCsiTimestamp'}
+    KubernetesReadyAttachment:
+      allOf:
+      - {$ref: '#/components/schemas/KubernetesVolumeAttachment'}
+      - properties:
+          status: {const: ATTACHED}
+      description: Fencing durably completed and attachment observed with the requested identity, shape
+        and readonly policy. An instruction queued to a hypervisor is not success.
+    KubernetesVolumeAttachmentEnsure:
+      type: object
+      required: [nodeId, readonly, volumeMode, fsType, volumeContext, allowedTransports]
+      properties:
+        nodeId: {$ref: '#/components/schemas/KubernetesNodeId'}
+        readonly: {type: boolean}
+        volumeMode: {type: string, enum: [FILESYSTEM, BLOCK]}
+        fsType: {type: [string, 'null'], minLength: 1}
+        volumeContext: {$ref: '#/components/schemas/KubernetesCsiParameters'}
+        allowedTransports:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, enum: [LEGACY_KRBD, QEMU]}
+      description: Ensure the requested volume/node pair. The same compatible pair returns its existing
+        observed attachment; another live owner returns attached-elsewhere without implicit detach. QEMU
+        requires a proven current incarnation, legacy path release, completed fencing and an observed
+        device. First QEMU attachment may adopt an inventoried legacy volume exactly once. LEGACY_KRBD
+        is allowed only if LEGACY_POOL_ROUTING is enabled and the authoritative legacy route is verified.
+        Verify ATTACHMENT_ALLOWED_TRANSPORTS before every request. Apply allowedTransports atomically
+        before mutation; exclusion returns 412 transport-not-allowed, never a false legacy no-op.
+        Unsupported QEMU shapes, modes, options or metadata and reader-only modes with readonly false
+        require a legacy-only allowlist. Legacy filesystem null means unspecified. Structural and secret
+        validation still apply. Native/adopted images and live/pending QEMU ownership never qualify as legacy.
+      additionalProperties: false
+      allOf:
+      - if:
+          properties:
+            allowedTransports:
+              contains: {const: QEMU}
+          required: [allowedTransports]
+        then:
+          properties:
+            fsType: {type: [string, 'null'], enum: [XFS, EXT4, null]}
+          allOf:
+          - if:
+              properties:
+                volumeMode: {const: FILESYSTEM}
+              required: [volumeMode]
+            then:
+              properties:
+                fsType: {type: string, enum: [XFS, EXT4]}
+      - if:
+          properties:
+            volumeMode: {const: BLOCK}
+          required: [volumeMode]
+        then:
+          properties:
+            fsType: {type: 'null'}
+    KubernetesSnapshot:
+      type: object
+      required: [id, clusterId, name, sourceVolumeId, sizeBytes, creationDate, status, readyToUse, provenance,
+        failureCause]
+      properties:
+        id: {$ref: '#/components/schemas/KubernetesSnapshotId'}
+        clusterId: {type: string}
+        name:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesCsiName'}
+          - {type: 'null'}
+        sourceVolumeId: {$ref: '#/components/schemas/KubernetesVolumeId'}
+        sizeBytes: {type: integer, format: int64, minimum: 0}
+        creationDate: {$ref: '#/components/schemas/KubernetesCsiTimestamp'}
+        status: {type: string, enum: [PROCESSING, READY, FAILED]}
+        readyToUse: {type: boolean}
+        provenance: {type: string, enum: [NATIVE, LEGACY]}
+        failureCause:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesCsiFailure'}
+          - {type: 'null'}
+        operation:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesCsiOperation'}
+          - {type: 'null'}
+      description: A record exists only after the point-in-time has been taken. id, sourceVolumeId and
+        creationDate remain immutable, including after source deletion and across retries. No pre-cut
+        CREATING record is exposed to CSI. PROCESSING is a valid pending snapshot; FAILED is a durable
+        retained failure, not disappearance. A retry must never take a new point-in-time while this one
+        exists. GET/list expose FAILED to humans; the CSI adapter returns INTERNAL if a selected entry
+        is FAILED, without hiding it as absent or spinning forever. Failure observations, including embedded
+        operation failures, are bounded and sanitized through KubernetesCsiFailure; no private backend
+        diagnostic reaches an OAuth reader. A FAILED entry selected by an unfiltered CSI page also makes
+        that CSI call fail INTERNAL.
+      allOf:
+      - if:
+          properties:
+            status: {const: READY}
+          required: [status]
+        then:
+          properties:
+            readyToUse: {const: true}
+            failureCause: {type: 'null'}
+        else:
+          properties:
+            readyToUse: {const: false}
+      - if:
+          properties:
+            status: {const: FAILED}
+          required: [status]
+        then:
+          properties:
+            failureCause: {$ref: '#/components/schemas/KubernetesCsiFailure'}
+      - if:
+          properties:
+            status: {const: PROCESSING}
+          required: [status]
+        then:
+          properties:
+            failureCause: {type: 'null'}
+      - if:
+          properties:
+            provenance: {const: NATIVE}
+          required: [provenance]
+        then:
+          properties:
+            id: {maxLength: 128}
+            name: {type: string, maxLength: 128, x-maxUtf8Bytes: 128}
+    KubernetesEnsuredSnapshot:
+      allOf:
+      - {$ref: '#/components/schemas/KubernetesSnapshot'}
+      - properties:
+          status: {type: string, enum: [PROCESSING, READY]}
+      description: 200/201 only after the point-in-time exists. PROCESSING is returned with readyToUse
+        false; durable failure returns 500 snapshot-failed instead of this success schema.
+    KubernetesSnapshotEnsure:
+      type: object
+      required: [name, sourceVolumeId, parameters]
+      properties:
+        name: {$ref: '#/components/schemas/KubernetesCsiName'}
+        sourceVolumeId: {$ref: '#/components/schemas/KubernetesVolumeId'}
+        parameters: {$ref: '#/components/schemas/KubernetesCsiParameters'}
+      description: Ensure the same named snapshot of the same immutable source. Never take another point-in-time
+        for a retry whose prior snapshot already exists, including a durable FAILED record.
+      additionalProperties: false
+    KubernetesCsiDeleteOutcome:
+      type: object
+      required: [outcome, resourceId, nodeId, detachedNodeIds, operationId]
+      properties:
+        outcome: {type: string, enum: [DELETED, DETACHED, ALREADY_ABSENT, LEGACY_NOOP]}
+        resourceId: {$ref: '#/components/schemas/KubernetesVolumeId'}
+        nodeId:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesNodeId'}
+          - {type: 'null'}
+        detachedNodeIds:
+          type: array
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/KubernetesNodeId'}
+        operationId:
+          anyOf:
+          - {$ref: '#/components/schemas/KubernetesCsiOperationId'}
+          - {type: 'null'}
+      description: Server-authoritative result after scoped registry and legacy-journal checks. resourceId
+        echoes the exact requested immutable volume/snapshot handle. nodeId echoes the requested detach
+        target, or null for detach-all and resource deletion. detachedNodeIds lists completed QEMU detachments
+        only and is empty otherwise. operationId is null if no durable operation was necessary. Missing
+        route, unknown identity syntax and lookup failure never produce this success body.
+      allOf:
+      - if:
+          properties:
+            outcome: {enum: [DELETED, ALREADY_ABSENT, LEGACY_NOOP]}
+          required: [outcome]
+        then:
+          properties:
+            detachedNodeIds: {maxItems: 0}
+    KubernetesResourceDeleteOutcome:
+      allOf:
+      - {$ref: '#/components/schemas/KubernetesCsiDeleteOutcome'}
+      - properties:
+          outcome: {type: string, enum: [DELETED, ALREADY_ABSENT]}
+          nodeId: {type: 'null'}
+          detachedNodeIds: {maxItems: 0}
+    KubernetesDetachOutcome:
+      allOf:
+      - {$ref: '#/components/schemas/KubernetesCsiDeleteOutcome'}
+      - properties:
+          outcome: {type: string, enum: [DETACHED, ALREADY_ABSENT, LEGACY_NOOP]}
+      - if:
+          properties:
+            outcome: {const: DETACHED}
+          required: [outcome]
+        then:
+          properties:
+            detachedNodeIds: {minItems: 1}
+      description: DETACHED requires completed QEMU removal; LEGACY_NOOP requires an authoritatively classified
+        and verified legacy path. Detach-all validates every targeted incarnation, including every legacy
+        entry, before success. If any target is unresolved, busy, live-unfenced or unreachable, return
+        an error, not partial success. ALREADY_ABSENT requires authoritative absence, including proof
+        that no relevant attachment/session survives; an unknown node id alone is insufficient. DETACHED
+        reports at least one completed target. For a single-node DELETE, each returned detachedNodeIds
+        entry must equal that requested nodeId.
+    KubernetesCsiCursor:
+      type: string
+      minLength: 1
+      maxLength: 2048
+      pattern: ^[A-Za-z0-9_-]+(?![\s\S])
+      description: Opaque ASCII cursor from this cluster and the same filters. Issued cursors are at most
+        128 bytes; accepted inputs are bounded at 2048 bytes, and invalid/expired/foreign cursors return
+        invalid-cursor. Validate the full encoded URL length against the deployed frontend.
+    KubernetesVolumePage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 250
+          items: {$ref: '#/components/schemas/KubernetesVolume'}
+        nextCursor:
+          anyOf:
+          - {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+(?![\s\S])'}
+          - {type: 'null'}
+      description: 'Page bounded by both item count and serialized bytes: at most the requested/clamped
+        count, at most listLimitMax=250, and at most maxResponseBytes=1 MiB including the envelope. Short
+        pages may continue with nextCursor. End of listing is nextCursor null. No matches is an empty
+        page. Pagination includes compatible inventoried legacy resources without adopting them.'
+    KubernetesVolumeAttachmentPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 250
+          items: {$ref: '#/components/schemas/KubernetesVolumeAttachment'}
+        nextCursor:
+          anyOf:
+          - {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+(?![\s\S])'}
+          - {type: 'null'}
+      description: 'Page bounded by both item count and serialized bytes: at most the requested/clamped
+        count, at most listLimitMax=250, and at most maxResponseBytes=1 MiB including the envelope. Short
+        pages may continue with nextCursor. End of listing is nextCursor null. No matches is an empty
+        page. Pagination includes compatible inventoried legacy resources without adopting them.'
+    KubernetesSnapshotPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 250
+          items: {$ref: '#/components/schemas/KubernetesSnapshot'}
+        nextCursor:
+          anyOf:
+          - {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+(?![\s\S])'}
+          - {type: 'null'}
+      description: 'Page bounded by both item count and serialized bytes: at most the requested/clamped
+        count, at most listLimitMax=250, and at most maxResponseBytes=1 MiB including the envelope. Short
+        pages may continue with nextCursor. End of listing is nextCursor null. No matches is an empty
+        page. Pagination includes compatible inventoried legacy resources without adopting them.'
+    KubernetesCsiLimits:
+      type: object
+      required: [defaultVolumeBytes, minVolumeBytes, maxVolumeBytes, capacityGranularityBytes, defaultWaitSeconds,
+        maxWaitSeconds, maxRequestBytes, maxResponseBytes, listLimitDefault, listLimitMax, maxCursorBytes,
+        maxEmittedCursorBytes, maxNativeHandleBytes, maxLegacyHandleBytes, maxNewNameUtf8Bytes, maxLegacyNameUtf8Bytes]
+      properties:
+        defaultVolumeBytes: {type: integer, format: int64, minimum: 1, example: 1073741824}
+        minVolumeBytes: {type: integer, format: int64, minimum: 1, example: 1}
+        maxVolumeBytes: {type: integer, format: int64, minimum: 1}
+        capacityGranularityBytes: {type: integer, format: int64, minimum: 1, example: 4194304}
+        defaultWaitSeconds: {type: integer, format: int64, minimum: 0, maximum: 110, example: 30}
+        maxWaitSeconds: {type: integer, format: int64, minimum: 0, maximum: 110, example: 110}
+        maxRequestBytes: {type: integer, format: int64, minimum: 1, maximum: 262144, example: 262144}
+        maxResponseBytes: {type: integer, format: int64, minimum: 1, maximum: 1048576, example: 1048576}
+        listLimitDefault: {type: integer, format: int64, minimum: 1, maximum: 250, example: 100}
+        listLimitMax: {type: integer, format: int64, minimum: 1, maximum: 250, example: 250}
+        maxCursorBytes: {type: integer, format: int64, minimum: 1, maximum: 2048, example: 2048}
+        maxEmittedCursorBytes: {type: integer, format: int64, minimum: 1, maximum: 128, example: 128}
+        maxNativeHandleBytes: {type: integer, format: int64, minimum: 1, maximum: 128, example: 128}
+        maxLegacyHandleBytes: {type: integer, format: int64, minimum: 1, maximum: 1024, example: 1024}
+        maxNewNameUtf8Bytes: {type: integer, format: int64, minimum: 1, maximum: 128, example: 128}
+        maxLegacyNameUtf8Bytes: {type: integer, format: int64, minimum: 1, maximum: 1024, example: 1024}
+      description: 'Effective server limits, validated as a consistent set: minVolumeBytes <= defaultVolumeBytes
+        <= maxVolumeBytes; defaultWaitSeconds <= maxWaitSeconds; listLimitDefault <= listLimitMax; maxEmittedCursorBytes
+        <= maxCursorBytes. Examples are proposed values, not evidence of deployed frontend support. The
+        adapter must retain its own response/request/deadline hard ceilings when consuming these limits.'
+    KubernetesCsiFeatures:
+      type: object
+      required: [core, optional]
+      properties:
+        core:
+          type: array
+          uniqueItems: true
+          items: {type: string}
+          contains: {const: ATTACHMENT_ALLOWED_TRANSPORTS}
+          description: 'This revision requires: VOLUME_ENSURE, VOLUME_RESOLVE, VOLUME_DELETE, ATTACHMENT_ENSURE,
+            ATTACHMENT_DELETE, ATTACHMENT_READONLY, ATTACHMENT_ALLOWED_TRANSPORTS. The last feature
+            guarantees authoritative allowlist enforcement before mutation and is checked before every
+            attach. Unknown strings are ignored, not decoding failures.'
+        optional:
+          type: array
+          uniqueItems: true
+          items: {type: string}
+          description: 'Known optional features: VOLUME_EXPAND, VOLUME_CLONE, SNAPSHOT, SNAPSHOT_RESTORE,
+            LEGACY_POOL_ROUTING, VOLUME_LIST, ATTACHMENT_LIST. SNAPSHOT includes ensure/delete/list/get.
+            Unknown strings are ignored. Features gate operations only, not response fields or enum values.'
+      description: Forward-compatible feature-name lists. Driver CSI capabilities and RPC admission must
+        match the effective feature set. A mixed legacy/new pool additionally requires LEGACY_POOL_ROUTING
+        for readiness; removing it is a coordinated migration change. SNAPSHOT_RESTORE requires SNAPSHOT.
+        Freeze a coherent negotiated feature set per controller instance; incompatible feature changes
+        require controlled reconfiguration or restart.
+      allOf:
+      - if:
+          properties:
+            optional:
+              contains: {const: SNAPSHOT_RESTORE}
+          required: [optional]
+        then:
+          properties:
+            optional:
+              contains: {const: SNAPSHOT}
+    KubernetesCsiCapabilities:
+      type: object
+      required: [contractVersion, minContractVersion, formatPolicy, features, limits, ready, checkedAt,
+        unreadyReasons]
+      properties:
+        contractVersion:
+          type: string
+          format: date
+          description: Effective contract revision selected for this request, not necessarily the newest
+            server revision.
+        minContractVersion:
+          type: string
+          format: date
+          description: Oldest supported contract revision. The driver must not operate below this floor.
+        formatPolicy: {type: string, enum: [PREFORMATTED]}
+        features: {$ref: '#/components/schemas/KubernetesCsiFeatures'}
+        limits: {$ref: '#/components/schemas/KubernetesCsiLimits'}
+        ready: {type: boolean}
+        checkedAt: {$ref: '#/components/schemas/KubernetesCsiTimestamp'}
+        unreadyReasons:
+          type: array
+          items: {type: string}
+      description: Contract data plus a cached readiness observation at most ten seconds old. No deep
+        health probe is triggered by the caller and no long-lived HTTP caching may hide readiness changes.
+        The driver pins its contract date on this request too; a too-old version is an explicit error
+        and unready state. Health does not wait for an individual volume operation. ready false is still
+        a valid HTTP 200 observation.
+    HTTPErrorBody:
+      description: 'Error returned by the API: branch on `code`, show `error` to a human, read `context`
+        for details, and quote `apiRequestId` when contacting support.'
+      properties:
+        apiRequestId:
+          description: '`request_<uuid>` — correlates the response with the request''s traces and logs.'
+          type: string
+        code:
+          description: Machine-matchable code, e.g. `clever.core.not-found`.
+          type: string
+        context:
+          $ref: '#/components/schemas/ErrorContext'
+          description: Structured detail, discriminated by `type`.
+        error:
+          description: Human-readable message. Not a stable contract; branch on `code`.
+          type: string
+      required: [apiRequestId, code, context, error]
+      type: object
+    ErrorContext:
+      description: Structured details of an error, discriminated by `type`.
+      oneOf:
+      - description: No structured detail — most authz, validation and internal errors.
+        properties:
+          type: {enum: [empty], type: string}
+        required: [type]
+        type: object
+      - description: One offending field.
+        properties:
+          error: {$ref: '#/components/schemas/FieldError'}
+          name: {type: string}
+          type: {enum: [field], type: string}
+        required: [name, error, type]
+        type: object
+      - description: Several offending fields, keyed by name.
+        properties:
+          fields:
+            additionalProperties: {$ref: '#/components/schemas/FieldError'}
+            propertyNames: {type: string}
+            type: object
+          type: {enum: [multiple_fields], type: string}
+        required: [fields, type]
+        type: object
+      - description: The offending input names.
+        properties:
+          names:
+            items: {type: string}
+            type: array
+          type: {enum: [input], type: string}
+        required: [names, type]
+        type: object
+      - description: The offending resource, so a client can machine-match it.
+        properties:
+          kind: {type: string}
+          name: {type: string}
+          type: {enum: [resource], type: string}
+        required: [kind, name, type]
+        type: object
+      - description: The operation that failed, and the resource it targeted.
+        properties:
+          kind: {type: string}
+          name: {type: [string, 'null']}
+          operation: {type: string}
+          type: {enum: [operation], type: string}
+        required: [operation, kind, type]
+        type: object
+      - description: The path into a document that failed to select.
+        properties:
+          path:
+            items: {type: string}
+            type: array
+          type: {enum: [selector], type: string}
+        required: [path, type]
+        type: object
+      - description: An upstream answered with a status this API forwards.
+        properties:
+          original_body: {type: string}
+          original_status: {format: int32, minimum: 0, type: integer}
+          type: {enum: [gateway_error], type: string}
+        required: [original_status, original_body, type]
+        type: object
+    FieldError:
+      description: 'Why one field was rejected: a machine-matchable `code` and a human-readable `error`.'
+      properties:
+        code: {type: string}
+        error: {type: string}
+      required: [code, error]
+      type: object
+    LegacyAuthError:
+      type: object
+      required: [id, message, type]
+      properties:
+        id: {type: integer}
+        message: {type: string}
+        type: {type: string}
+      description: Existing cc-api authentication middleware form; inspect the HTTP status, not this id
+        as a CSI code.
+    LegacyOvdError:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: string}
+        message: {type: string}
+      description: Existing Kubernetes path-validation form. Middleware failures use HTTP-status fallback.
+    KubernetesCsiErrorCode:
+      type: string
+      enum: [clever.kubernetes.invalid-request, clever.kubernetes.forbidden-parameter, clever.kubernetes.incompatible-source,
+        clever.kubernetes.capacity-out-of-range, clever.kubernetes.invalid-cursor, clever.kubernetes.volume-not-found,
+        clever.kubernetes.snapshot-not-found, clever.kubernetes.node-not-found, clever.kubernetes.attachment-not-found,
+        clever.kubernetes.cluster-not-found, clever.kubernetes.incompatible-resource, clever.kubernetes.operation-in-progress,
+        clever.kubernetes.volume-in-use, clever.kubernetes.attached-elsewhere, clever.kubernetes.attachment-conflict,
+        clever.kubernetes.incarnation-unknown, clever.kubernetes.device-busy, clever.kubernetes.legacy-session-present,
+        clever.kubernetes.shape-mismatch, clever.kubernetes.node-not-attachable, clever.kubernetes.transport-not-allowed,
+        clever.kubernetes.fencing-required,
+        clever.kubernetes.legacy-path-not-released, clever.kubernetes.attachment-limit, clever.kubernetes.storage-quota-exceeded,
+        clever.kubernetes.request-too-large, clever.kubernetes.rate-limited, clever.kubernetes.snapshot-failed,
+        clever.kubernetes.unsupported-capability, clever.kubernetes.hypervisor-unreachable, clever.kubernetes.backend-unavailable,
+        clever.kubernetes.upstream-timeout]
+      description: Handler error catalogue for revision 2026-10-13. HTTPErrorBody.code remains an extensible
+        string shared with Axo; clients apply code-first mappings for recognized codes, then HTTP fallback
+        for unknown codes.
+    KubernetesCsiFailure:
+      allOf:
+      - {$ref: '#/components/schemas/HTTPErrorBody'}
+      - properties:
+          error: {type: string, maxLength: 1024, x-maxUtf8Bytes: 1024}
+          context:
+            allOf:
+            - {$ref: '#/components/schemas/ErrorContext'}
+            - properties:
+                type: {enum: [empty, field, resource, operation]}
+      x-maxSerializedBytes: 4096
+      description: Public, retained failure observation. Reconstruct and sanitize every message/context
+        string before exposure to organization members. The entire serialized diagnostic is at most 4096
+        UTF-8 bytes, including message and context; the error message is at most 1024 UTF-8 bytes. These
+        byte bounds require runtime enforcement. No credential, private hypervisor address/detail or raw
+        subprocess/upstream response is exposed. gateway_error.original_body is never copied into this
+        record. Keep only bounded public field/resource/operation references.
+x-csi-error-codes:
+  clever.kubernetes.invalid-request:
+    httpStatus: 400
+    csiCode: INVALID_ARGUMENT
+    contextType: field
+    description: Malformed JSON, unknown fields/types/enums, invalid conditional shape or byte limits.
+  clever.kubernetes.forbidden-parameter:
+    httpStatus: 400
+    csiCode: INVALID_ARGUMENT
+    contextType: field
+    description: Unsupported or credential-bearing CSI metadata.
+  clever.kubernetes.incompatible-source:
+    httpStatus: 400
+    csiCode: INVALID_ARGUMENT
+    contextType: resource
+    description: Requested clone/restore shape is incompatible with verified source; no copy or reformat.
+  clever.kubernetes.capacity-out-of-range:
+    httpStatus: 400
+    csiCode: OUT_OF_RANGE
+    contextType: field
+    description: Requested/rounded/source/existing capacity cannot satisfy the supplied range or platform
+      limits.
+  clever.kubernetes.invalid-cursor:
+    httpStatus: 400
+    csiCode: ABORTED
+    contextType: empty
+    description: Cursor is malformed, expired or bound to another cluster/filter set.
+  clever.kubernetes.volume-not-found:
+    httpStatus: 404
+    csiCode: NOT_FOUND
+    contextType: resource
+    description: Authoritative scoped volume absence; never emitted as a DELETE result.
+  clever.kubernetes.snapshot-not-found:
+    httpStatus: 404
+    csiCode: NOT_FOUND
+    contextType: resource
+    description: Authoritative scoped snapshot absence; never emitted as a DELETE result.
+    rpcOverrides:
+      ListSnapshots:
+        csiCode: OK
+        description: 'Only when lookup by the explicitly requested snapshot_id authoritatively finds no
+          snapshot: return an empty page. An absent clone source remains NOT_FOUND.'
+  clever.kubernetes.node-not-found:
+    httpStatus: 404
+    csiCode: NOT_FOUND
+    contextType: resource
+    description: Attachment creation target is unknown or confirmed destroyed.
+  clever.kubernetes.attachment-not-found:
+    httpStatus: 404
+    csiCode: NOT_FOUND
+    contextType: resource
+    description: GET attachment has no scoped record, regardless of whether the node incarnation is known.
+  clever.kubernetes.cluster-not-found:
+    httpStatus: 404
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: Cluster is unknown/deleted; driver becomes unready.
+  clever.kubernetes.incompatible-resource:
+    httpStatus: 409
+    csiCode: ALREADY_EXISTS
+    contextType: resource
+    description: Terminal resource with the same identity has incompatible strict fields.
+  clever.kubernetes.operation-in-progress:
+    httpStatus: 409
+    csiCode: ABORTED
+    contextType: operation
+    description: Durable intent is still running or a conflicting operation has not reached a terminal
+      state. The existing ErrorContext operation variant carries type=operation, kind=operation, operation=the
+      action family (for example ATTACHMENT_ENSURE), and name=the durable intent id. name is mandatory
+      for this code and correlates retries with the embedded operation.id; do not invent another context
+      variant.
+    contextExample: {type: operation, kind: operation, operation: ATTACHMENT_ENSURE, name: kubernetes_operation_01ARZ3NDEKTSV4RRFFQ69G5FAV}
+  clever.kubernetes.volume-in-use:
+    httpStatus: 409
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: Volume deletion would remove an attached/pending QEMU or verified legacy resource.
+  clever.kubernetes.attached-elsewhere:
+    httpStatus: 409
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: Another live incarnation owns the volume; no implicit detach.
+  clever.kubernetes.attachment-conflict:
+    httpStatus: 409
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: Requested transport or attachment conflicts with authoritative ownership.
+  clever.kubernetes.incarnation-unknown:
+    httpStatus: 409
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: Incarnation is ambiguous or its safe destruction/detachment cannot be established.
+  clever.kubernetes.device-busy:
+    httpStatus: 409
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: Guest/device refused detachment.
+  clever.kubernetes.legacy-session-present:
+    httpStatus: 409
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: A legacy session prevents safe expansion.
+  clever.kubernetes.shape-mismatch:
+    httpStatus: 412
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: Positively established incompatible shape before mutation; never an unavailable/unknown
+      backend state.
+    rpcOverrides:
+      ValidateVolumeCapabilities:
+        csiCode: OK
+        confirmed: false
+        description: Return an unconfirmed response with a message; unknown backend state must remain
+          an error.
+      ControllerExpandVolume: {csiCode: INVALID_ARGUMENT}
+  clever.kubernetes.node-not-attachable:
+    httpStatus: 412
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: Known live VM lacks the required virtio-scsi/hotplug support.
+  clever.kubernetes.transport-not-allowed:
+    httpStatus: 412
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: The authoritative attachment route is excluded by allowedTransports. No attachment,
+      adoption or ownership mutation was performed. Never replace the excluded route with a legacy no-op.
+  clever.kubernetes.fencing-required:
+    httpStatus: 412
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: Prior ownership has not been durably fenced.
+  clever.kubernetes.legacy-path-not-released:
+    httpStatus: 412
+    csiCode: FAILED_PRECONDITION
+    contextType: resource
+    description: Legacy access has not been positively released before QEMU adoption.
+  clever.kubernetes.attachment-limit:
+    httpStatus: 412
+    csiCode: RESOURCE_EXHAUSTED
+    contextType: resource
+    description: No supported attachment slot is available.
+  clever.kubernetes.storage-quota-exceeded:
+    httpStatus: 412
+    csiCode: RESOURCE_EXHAUSTED
+    contextType: empty
+    description: Pool capacity or owner quota is insufficient.
+  clever.kubernetes.request-too-large:
+    httpStatus: 413
+    csiCode: INVALID_ARGUMENT
+    contextType: empty
+    description: Request body exceeds maxRequestBytes.
+  clever.kubernetes.rate-limited:
+    httpStatus: 429
+    csiCode: RESOURCE_EXHAUSTED
+    contextType: empty
+    description: Per-cluster admission/rate limit; observe Retry-After.
+  clever.kubernetes.snapshot-failed:
+    httpStatus: 500
+    csiCode: INTERNAL
+    contextType: resource
+    description: Retained snapshot point-in-time has a durable terminal failure; never create a replacement
+      point-in-time on retry.
+    rpcOverrides:
+      CreateSnapshot: {csiCode: INTERNAL}
+      ListSnapshots:
+        csiCode: INTERNAL
+        description: A selected FAILED record in a successful GET/list response is also an INTERNAL error
+          for the CSI adapter; never drop it or falsely mark it ready.
+  clever.kubernetes.unsupported-capability:
+    httpStatus: 501
+    csiCode: UNIMPLEMENTED
+    contextType: operation
+    description: Optional operation is not enabled by the advertised feature set.
+  clever.kubernetes.hypervisor-unreachable:
+    httpStatus: 503
+    csiCode: UNAVAILABLE
+    contextType: resource
+    description: QMP/Supernova cannot be contacted; no implicit fence or absence.
+  clever.kubernetes.backend-unavailable:
+    httpStatus: 503
+    csiCode: UNAVAILABLE
+    contextType: empty
+    description: Ceph/database/journal lookup or observation is unavailable; never report absence.
+  clever.kubernetes.upstream-timeout:
+    httpStatus: 504
+    csiCode: DEADLINE_EXCEEDED
+    contextType: operation
+    description: Dependency timed out before intent registration; after registration return operation-in-progress.
+x-csi-http-fallback:
+  '400': INVALID_ARGUMENT
+  '401': UNAUTHENTICATED
+  '403': PERMISSION_DENIED
+  '404': UNIMPLEMENTED
+  '405': UNIMPLEMENTED
+  '408': DEADLINE_EXCEEDED
+  '409': FAILED_PRECONDITION
+  '412': FAILED_PRECONDITION
+  '413': INVALID_ARGUMENT
+  '415': INVALID_ARGUMENT
+  '422': INVALID_ARGUMENT
+  '429': RESOURCE_EXHAUSTED
+  '501': UNIMPLEMENTED
+  '504': DEADLINE_EXCEEDED
+  other5xx: UNAVAILABLE
+  transportFailure: UNAVAILABLE
+  redirect: FAILED_PRECONDITION
+  unexpected202: ABORTED
+  invalidMutationSuccessBody: UNAVAILABLE
+  invalidReadSuccessBody: DATA_LOSS

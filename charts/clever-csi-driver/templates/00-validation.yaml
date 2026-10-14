@@ -1,0 +1,15 @@
+{{- $activeRoles := or .Values.controller.sidecars.attacher .Values.controller.sidecars.provisioner .Values.controller.sidecars.resizer .Values.controller.sidecars.snapshotter -}}
+{{- if and .Values.controller.enabled $activeRoles (not .Values.controller.ownershipConfirmed) -}}
+{{- fail "controller.ownershipConfirmed must be true after stopping the legacy sidecars for every enabled role" -}}
+{{- end -}}
+{{- if .Values.controller.enabled -}}
+{{- $_ := required "controller.clusterId is required" .Values.controller.clusterId -}}
+{{- $_ := required "controller.organisationId is required" .Values.controller.organisationId -}}
+{{- $_ := required "controller.existingSecret is required" .Values.controller.existingSecret -}}
+{{- if not (hasPrefix "https://" .Values.controller.axoUrl) -}}
+{{- fail "controller.axoUrl must use HTTPS" -}}
+{{- end -}}
+{{- end -}}
+{{- if or (not (hasPrefix "/" .Values.node.idFile)) (not (hasPrefix "/" .Values.node.kubeletDirectory)) (not (hasPrefix "/" .Values.node.stateDirectory)) -}}
+{{- fail "node host paths must be absolute" -}}
+{{- end -}}

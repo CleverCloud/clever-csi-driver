@@ -1,0 +1,102 @@
+{{- if .Values.controller.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-controller
+  labels:
+    {{- include "csi.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [storage.k8s.io]
+    resources: [csinodes]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list, watch{{ if .Values.controller.sidecars.provisioner }}, create, delete{{ end }}, patch]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [get, list, watch, create, update, patch]
+  {{- if or .Values.controller.sidecars.attacher .Values.controller.sidecars.provisioner }}
+  - apiGroups: [storage.k8s.io]
+    resources: [volumeattachments]
+    verbs: [get, list, watch{{ if .Values.controller.sidecars.attacher }}, patch{{ end }}]
+  {{- end }}
+  {{- if .Values.controller.sidecars.attacher }}
+  - apiGroups: [storage.k8s.io]
+    resources: [volumeattachments/status]
+    verbs: [patch]
+  {{- end }}
+  {{- if or .Values.controller.sidecars.provisioner .Values.controller.sidecars.resizer }}
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, watch, update, patch]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
+  {{- end }}
+  {{- if .Values.controller.sidecars.resizer }}
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims/status]
+    verbs: [update, patch]
+  {{- end }}
+  {{- if .Values.controller.sidecars.provisioner }}
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshots, volumesnapshotcontents]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims/finalizers]
+    verbs: [update]
+  {{- end }}
+  {{- if .Values.controller.sidecars.snapshotter }}
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshotclasses]
+    verbs: [get, list, watch]
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshotcontents]
+    verbs: [get, list, watch, update, patch]
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshotcontents/status]
+    verbs: [update, patch]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-controller
+  labels:
+    {{- include "csi.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ .Release.Name }}-controller}
+subjects:
+  - {kind: ServiceAccount, name: {{ .Release.Name }}-controller, namespace: {{ .Release.Namespace }}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "csi.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  {{- if .Values.controller.referencedSecretNames }}
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: {{ .Values.controller.referencedSecretNames | toJson }}
+    verbs: [get]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "csi.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ .Release.Name }}-controller}
+subjects:
+  - {kind: ServiceAccount, name: {{ .Release.Name }}-controller, namespace: {{ .Release.Namespace }}}
+{{- end }}

@@ -1,0 +1,95 @@
+{{- if .Values.controller.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "csi.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: controller}
+  template:
+    metadata:
+      labels:
+        {{- include "csi.labels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      serviceAccountName: {{ .Release.Name }}-controller
+      priorityClassName: system-cluster-critical
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ . | toJson }}
+      {{- end }}
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector: {{ . | toJson }}
+      {{- end }}
+      tolerations: {{ .Values.controller.tolerations | toJson }}
+      containers:
+        - name: driver
+          image: {{ include "csi.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --mode=controller
+            - --endpoint=unix:///csi/csi.sock
+            - --driver-name={{ .Values.driverName }}
+            - --cluster-id={{ .Values.controller.clusterId }}
+            - --organisation-id={{ .Values.controller.organisationId }}
+            - --axo-url={{ .Values.controller.axoUrl }}
+            - --axo-token-file=/etc/clever-csi/token
+            - --health-address=0.0.0.0:9808
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          {{- include "csi.probes" . | nindent 10 }}
+          resources: {{ .Values.controller.resources | toJson }}
+          volumeMounts:
+            - {name: socket, mountPath: /csi}
+            - {name: token, mountPath: /etc/clever-csi, readOnly: true}
+        {{- range $role := list "attacher" "provisioner" "resizer" "snapshotter" }}
+        {{- if index $.Values.controller.sidecars $role }}
+        - name: csi-{{ $role }}
+          image: {{ index $.Values.sidecarImages $role }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --leader-election=true
+            - --leader-election-namespace={{ $.Release.Namespace }}
+            - --timeout=180s
+            {{- if eq $role "provisioner" }}
+            - --default-fstype=xfs
+            - --feature-gates=Topology=false
+            - --enable-capacity=false
+            {{- else if eq $role "resizer" }}
+            - --handle-volume-inuse-error=false
+            - --feature-gates=VolumeAttributesClass=false
+            {{- else if eq $role "snapshotter" }}
+            - --feature-gates=CSIVolumeGroupSnapshot=false
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{ include "csi.sidecarResources" (dict "root" $ "role" $role) }}
+          volumeMounts:
+            - {name: socket, mountPath: /csi}
+        {{- end }}
+        {{- end }}
+      volumes:
+        - name: socket
+          emptyDir: {}
+        - name: token
+          secret:
+            secretName: {{ .Values.controller.existingSecret }}
+            defaultMode: 0440
+            items:
+              - {key: {{ .Values.controller.tokenKey }}, path: token}
+{{- end }}

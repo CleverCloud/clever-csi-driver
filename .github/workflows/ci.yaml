@@ -1,0 +1,128 @@
+name: CI and container image
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Rust 1.90.0
+        run: rustup toolchain install 1.90.0 --profile minimal --component rustfmt --component clippy
+      - name: Rust formatting, lint and tests
+        run: |
+          cargo +1.90.0 fmt --all --check
+          cargo +1.90.0 clippy --locked --all-targets -- -D warnings
+          cargo +1.90.0 test --locked --all-targets
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.19.0
+      - name: Check Helm and generated Axo bundles
+        run: |
+          python3 -m pip install -r deploy/requirements.txt
+          helm lint charts/clever-csi-driver
+          helm package charts/clever-csi-driver --destination "$RUNNER_TEMP/charts"
+          python3 deploy/test_packaging.py
+          python3 deploy/render.py --check
+          python3 deploy/test_api_contract.py
+          python3 -m openapi_spec_validator docs/axo-openapi-v1.yaml
+          python3 -m unittest discover -s deploy/sanity -p 'test_*.py'
+  linux-mounts:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Exercise real XFS, ext4 and raw block on fresh loop devices
+        run: bash deploy/test_linux.sh
+      - name: Run CSI conformance against isolated node and Axo fixtures
+        run: bash deploy/test_linux.sh sanity
+  image:
+    needs: [test, linux-mounts]
+    runs-on: ubuntu-24.04
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
+      image_id: ${{ steps.export.outputs.image_id }}
+      archive_sha256: ${{ steps.export.outputs.archive_sha256 }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        id: meta
+        with:
+          images: ghcr.io/clevercloud/clever-csi-driver
+          flavor: latest=false
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: clever-csi-driver:ci
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke-test runtime before publication
+        run: python3 deploy/test_image.py clever-csi-driver:ci
+      - name: Export the tested image
+        id: export
+        run: |
+          docker save --output "$RUNNER_TEMP/clever-csi-driver.tar" clever-csi-driver:ci
+          printf 'image_id=%s\n' "$(docker image inspect --format '{{.Id}}' clever-csi-driver:ci)" >> "$GITHUB_OUTPUT"
+          printf 'archive_sha256=%s\n' "$(sha256sum "$RUNNER_TEMP/clever-csi-driver.tar" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: upload
+        with:
+          name: tested-image-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/clever-csi-driver.tar
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    if: github.event_name == 'push'
+    needs: image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.image.outputs.artifact_id }}
+          path: ${{ runner.temp }}
+          merge-multiple: true
+      - name: Verify and load the tested image
+        env:
+          ARCHIVE_SHA256: ${{ needs.image.outputs.archive_sha256 }}
+          TESTED_IMAGE_ID: ${{ needs.image.outputs.image_id }}
+        run: |
+          printf '%s  %s\n' "$ARCHIVE_SHA256" "$RUNNER_TEMP/clever-csi-driver.tar" | sha256sum --check --strict
+          docker load --input "$RUNNER_TEMP/clever-csi-driver.tar"
+          test "$(docker image inspect --format '{{.Id}}' clever-csi-driver:ci)" = "$TESTED_IMAGE_ID"
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the tested image
+        env:
+          TESTED_IMAGE_ID: ${{ needs.image.outputs.image_id }}
+          IMAGE_TAGS: ${{ needs.image.outputs.tags }}
+        run: |
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            docker tag "$TESTED_IMAGE_ID" "$tag"
+            docker push "$tag"
+          done <<< "$IMAGE_TAGS"

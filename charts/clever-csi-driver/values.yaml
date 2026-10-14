@@ -1,0 +1,65 @@
+# Preserve rbd.csi.ceph.com for existing PVs. Never install two node plugins per node.
+driverName: rbd.csi.ceph.com
+image:
+  repository: ghcr.io/clevercloud/clever-csi-driver
+  tag: v0.1.0
+  # Set a registry digest to pin the exact tested image; overrides tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+# Exceeds sidecar/Axo deadlines; never proves a blocked kernel operation ended.
+terminationGracePeriodSeconds: 210
+# No Namespace, CSIDriver, StorageClass, Secret or snapshot CRD is owned by this chart.
+controller:
+  enabled: false
+  # Confirm that the corresponding legacy sidecars have been stopped first.
+  ownershipConfirmed: false
+  clusterId: ""
+  organisationId: ""
+  axoUrl: https://api.clever-cloud.com
+  existingSecret: clever-csi-axo
+  tokenKey: token
+  sidecars:
+    attacher: true
+    provisioner: false
+    resizer: false
+    snapshotter: false
+  # Only these referenced CSI Secrets can be read by the sidecars, in this namespace.
+  referencedSecretNames: [csi-rbd-secret]
+  nodeSelector: {}
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+  resources:
+    requests: {cpu: 100m, memory: 64Mi}
+    limits: {memory: 256Mi}
+node:
+  enabled: true
+  # A platform-provisioned file containing the exact VM incarnation ID Axo/Supernova resolve.
+  # This is NOT a Kubernetes Node name, cluster-vm-id, or guessed DMI identity.
+  idFile: /etc/clever-csi/node-id
+  stateDirectory: /var/lib/clever-csi
+  kubeletDirectory: /var/lib/kubelet
+  # Immutable once this pool hosts node plugins; changing eligibility can delete
+  # live DaemonSet pods even with OnDelete. See docs/operations.md.
+  poolLabel: clever-cloud.com/csi
+  poolValue: supernova
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}
+sidecarImages:
+  registrar: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.15.0
+  attacher: registry.k8s.io/sig-storage/csi-attacher:v4.10.0
+  provisioner: registry.k8s.io/sig-storage/csi-provisioner:v5.3.0
+  resizer: registry.k8s.io/sig-storage/csi-resizer:v1.14.0
+  snapshotter: registry.k8s.io/sig-storage/csi-snapshotter:v8.4.0
+sidecarResources:
+  # Per container, not shared by the pod. A starting point, not a capacity guarantee:
+  # controller sidecar informer caches grow with the cluster's object count.
+  requests: {cpu: 10m, memory: 128Mi}
+  limits: {memory: 512Mi}
+# Optional partial overrides, merged over sidecarResources for each named role.
+# Valid roles: registrar, attacher, provisioner, resizer, snapshotter.
+# Keep defaults empty so existing common overrides still apply to every role.
+sidecarResourcesByRole: {}

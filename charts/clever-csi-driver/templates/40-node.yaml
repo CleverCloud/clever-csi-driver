@@ -1,0 +1,96 @@
+{{- if .Values.node.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Release.Name }}-node
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "csi.labels" . | nindent 4 }}
+spec:
+  updateStrategy: {type: OnDelete}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: node}
+  template:
+    metadata:
+      labels:
+        {{- include "csi.labels" . | nindent 8 }}
+        app.kubernetes.io/component: node
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      serviceAccountName: {{ .Release.Name }}-node
+      automountServiceAccountToken: false
+      priorityClassName: system-node-critical
+      nodeSelector: {kubernetes.io/os: linux, kubernetes.io/arch: amd64}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: {{ .Values.node.poolLabel }}
+                    operator: In
+                    values: [{{ .Values.node.poolValue | quote }}]
+      tolerations:
+        - {operator: Exists}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ . | toJson }}
+      {{- end }}
+      containers:
+        - name: driver
+          image: {{ include "csi.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --mode=node
+            - --endpoint=unix:///csi/csi.sock
+            - --driver-name={{ .Values.driverName }}
+            - --node-id-file=/etc/clever-csi/node-id
+            - --node-state-dir=/var/lib/clever-csi
+            - --kubelet-root={{ .Values.node.kubeletDirectory }}
+            - --health-address=0.0.0.0:9808
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            readOnlyRootFilesystem: true
+          {{- include "csi.probes" . | nindent 10 }}
+          resources: {{ .Values.node.resources | toJson }}
+          volumeMounts:
+            - {name: socket, mountPath: /csi}
+            - {name: kubelet, mountPath: {{ .Values.node.kubeletDirectory }}, mountPropagation: Bidirectional}
+            - {name: devices, mountPath: /dev}
+            - {name: sys, mountPath: /sys}
+            - {name: node-id, mountPath: /etc/clever-csi/node-id, readOnly: true}
+            - {name: state, mountPath: /var/lib/clever-csi}
+            - {name: temporary, mountPath: /tmp}
+            - {name: run, mountPath: /run}
+        - name: registrar
+          image: {{ .Values.sidecarImages.registrar }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path={{ .Values.node.kubeletDirectory }}/plugins/{{ .Values.driverName }}/csi.sock
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{ include "csi.sidecarResources" (dict "root" . "role" "registrar") }}
+          volumeMounts:
+            - {name: socket, mountPath: /csi}
+            - {name: registration, mountPath: /registration}
+      volumes:
+        - name: socket
+          hostPath: {path: {{ .Values.node.kubeletDirectory }}/plugins/{{ .Values.driverName }}, type: DirectoryOrCreate}
+        - name: kubelet
+          hostPath: {path: {{ .Values.node.kubeletDirectory }}, type: Directory}
+        - name: registration
+          hostPath: {path: {{ .Values.node.kubeletDirectory }}/plugins_registry, type: DirectoryOrCreate}
+        - name: devices
+          hostPath: {path: /dev, type: Directory}
+        - name: sys
+          hostPath: {path: /sys, type: Directory}
+        - name: node-id
+          hostPath: {path: {{ .Values.node.idFile }}, type: File}
+        - name: state
+          hostPath: {path: {{ .Values.node.stateDirectory }}, type: DirectoryOrCreate}
+        - name: temporary
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+{{- end }}

@@ -1,0 +1,9 @@
+# Use only after removing the legacy attacher and confirming its lease expired after the process stopped.
+controller:
+  enabled: true
+  ownershipConfirmed: true
+  sidecars:
+    attacher: true
+    provisioner: false
+    resizer: false
+    snapshotter: false

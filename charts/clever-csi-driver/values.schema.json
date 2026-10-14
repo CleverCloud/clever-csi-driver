@@ -1,0 +1,325 @@
+{
+  "type": "object",
+  "properties": {
+    "driverName": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]+$",
+      "maxLength": 63
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pullPolicy": {
+          "enum": [
+            "IfNotPresent",
+            "Always",
+            "Never"
+          ]
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^$|^sha256:[a-f0-9]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "controller": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "ownershipConfirmed": {
+          "type": "boolean"
+        },
+        "clusterId": {
+          "type": "string"
+        },
+        "organisationId": {
+          "type": "string"
+        },
+        "axoUrl": {
+          "type": "string",
+          "pattern": "^https://[^ ]+$"
+        },
+        "existingSecret": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tokenKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sidecars": {
+          "type": "object",
+          "properties": {
+            "attacher": {
+              "type": "boolean"
+            },
+            "provisioner": {
+              "type": "boolean"
+            },
+            "resizer": {
+              "type": "boolean"
+            },
+            "snapshotter": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "referencedSecretNames": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "tolerations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "operator": {
+                "enum": [
+                  "Exists",
+                  "Equal"
+                ]
+              },
+              "value": {
+                "type": "string"
+              },
+              "effect": {
+                "enum": [
+                  "NoSchedule",
+                  "PreferNoSchedule",
+                  "NoExecute"
+                ]
+              },
+              "tolerationSeconds": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requests": {
+              "type": "object",
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              }
+            },
+            "limits": {
+              "type": "object",
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "node": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "idFile": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9_./-]+$"
+        },
+        "stateDirectory": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9_./-]+$"
+        },
+        "kubeletDirectory": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9_./-]+$"
+        },
+        "poolLabel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "poolValue": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requests": {
+              "type": "object",
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              }
+            },
+            "limits": {
+              "type": "object",
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "terminationGracePeriodSeconds": {
+      "type": "integer",
+      "minimum": 181
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "sidecarResources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "integer",
+                "minimum": 0
+              }
+            ]
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "integer",
+                "minimum": 0
+              }
+            ]
+          }
+        }
+      }
+    },
+    "sidecarResourcesByRole": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "registrar": {"$ref": "#/properties/sidecarResources"},
+        "attacher": {"$ref": "#/properties/sidecarResources"},
+        "provisioner": {"$ref": "#/properties/sidecarResources"},
+        "resizer": {"$ref": "#/properties/sidecarResources"},
+        "snapshotter": {"$ref": "#/properties/sidecarResources"}
+      }
+    },
+    "sidecarImages": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "registrar": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attacher": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provisioner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resizer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "snapshotter": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "additionalProperties": false
+}

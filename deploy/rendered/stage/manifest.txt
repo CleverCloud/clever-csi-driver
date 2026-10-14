@@ -1,0 +1,3 @@
+# clever-csi-driver 0.1.0; phase: stage
+01-serviceaccount-clever-csi-node.yaml
+02-daemonset-clever-csi-node.yaml

@@ -1,0 +1,9 @@
+# clever-csi-driver 0.1.0; phase: attach
+01-serviceaccount-clever-csi-controller.yaml
+02-serviceaccount-clever-csi-node.yaml
+03-clusterrole-clever-csi-controller.yaml
+04-clusterrolebinding-clever-csi-controller.yaml
+05-role-clever-csi-controller.yaml
+06-rolebinding-clever-csi-controller.yaml
+07-deployment-clever-csi-controller.yaml
+08-daemonset-clever-csi-node.yaml

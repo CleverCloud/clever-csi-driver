@@ -1,0 +1,9 @@
+# Use only after transferring ALL legacy sidecar roles and adopting image/snapshot journals.
+controller:
+  enabled: true
+  ownershipConfirmed: true
+  sidecars:
+    attacher: true
+    provisioner: true
+    resizer: true
+    snapshotter: true
